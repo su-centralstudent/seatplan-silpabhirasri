@@ -4,11 +4,46 @@ import {
   ZoomIn, ZoomOut, RotateCcw, 
   X, PenTool, Image as ImageIcon,
   Sliders, Trash2, Eye, EyeOff, Upload,
-  Plus, Minus, Settings, Check
+  Plus, Minus, Settings, Check,
+  Link as LinkIcon, ExternalLink, RefreshCw
 } from 'lucide-react';
 import { useDrawingCanvas } from '../hooks/useDrawingCanvas';
-import { ExactCeremonyCourtyard100 } from './ExactCeremonyCourtyard100';
 import { SeatCard } from './SeatCard';
+
+/**
+ * Converts various Google Drive link formats into direct embeddable image URLs:
+ * e.g., https://drive.google.com/file/d/FILE_ID/view?usp=sharing
+ * -> https://lh3.googleusercontent.com/d/FILE_ID
+ */
+export function convertGoogleDriveUrl(url: string): string {
+  if (!url) return '';
+  const trimmed = url.trim();
+
+  // Already a direct lh3 googleusercontent URL
+  if (trimmed.includes('googleusercontent.com')) {
+    return trimmed;
+  }
+
+  // https://drive.google.com/file/d/FILE_ID/...
+  const matchD = trimmed.match(/\/file\/d\/([a-zA-Z0-9_-]+)/);
+  if (matchD && matchD[1]) {
+    return `https://lh3.googleusercontent.com/d/${matchD[1]}`;
+  }
+
+  // https://drive.google.com/open?id=FILE_ID or ?id=FILE_ID
+  const matchId = trimmed.match(/[?&]id=([a-zA-Z0-9_-]+)/);
+  if (matchId && matchId[1]) {
+    return `https://lh3.googleusercontent.com/d/${matchId[1]}`;
+  }
+
+  // https://drive.google.com/uc?export=view&id=FILE_ID
+  const matchUc = trimmed.match(/\/uc\?(?:.*&)?id=([a-zA-Z0-9_-]+)/);
+  if (matchUc && matchUc[1]) {
+    return `https://lh3.googleusercontent.com/d/${matchUc[1]}`;
+  }
+
+  return trimmed;
+}
 
 export type EditZone = 'none' | 'pink' | 'yellow' | 'green-right' | 'peach-right' | 'ALL' | 'A-EX' | 'E' | 'F' | 'GH';
 
@@ -47,19 +82,35 @@ export const SeatingCanvas: React.FC<SeatingCanvasProps> = ({
   const [dragTargetSeatId, setDragTargetSeatId] = useState<string | null>(null);
   const [isZoneManagerModalOpen, setIsZoneManagerModalOpen] = useState(false);
 
-  // Background Image management (Allows user to embed Seating Plan.png & change anytime)
+  // Background Image management (Allows embedding Google Drive image link & local upload)
   type BgPlacementMode = 'stage' | 'full';
 
-  const DEFAULT_SYSTEM_BG = '/assets/ceremony_flow_100.svg';
+  // Drive URL input & background image state (Default: null, original system image removed)
+  const [driveUrlInput, setDriveUrlInput] = useState<string>(() => {
+    return localStorage.getItem('silpa_bhirasri_plan_drive_url') || '';
+  });
+  const [driveUrlError, setDriveUrlError] = useState<string | null>(null);
 
   const [bgImage, setBgImage] = useState<string | null>(() => {
     const saved = localStorage.getItem('silpa_bhirasri_plan_bg_image');
+    // If it was the old system svg or default, clear it out completely
+    if (saved && (saved.includes('ceremony_flow_100.svg') || saved === '/assets/ceremony_flow_100.svg')) {
+      localStorage.removeItem('silpa_bhirasri_plan_bg_image');
+      localStorage.removeItem('silpa_bhirasri_system_default_image');
+      return null;
+    }
     if (saved) return saved;
-    const defaultSaved = localStorage.getItem('silpa_bhirasri_system_default_image');
-    if (defaultSaved) return defaultSaved;
-    return DEFAULT_SYSTEM_BG;
+
+    // Check if there was a saved Google Drive URL
+    const savedDrive = localStorage.getItem('silpa_bhirasri_plan_drive_url');
+    if (savedDrive) {
+      return convertGoogleDriveUrl(savedDrive);
+    }
+
+    // Default: null (original system image removed as requested)
+    return null;
   });
-  const [isDefaultConfirmed, setIsDefaultConfirmed] = useState<boolean>(false);
+
   const [bgOpacity, setBgOpacity] = useState<number>(() => {
     const saved = localStorage.getItem('silpa_bhirasri_plan_bg_opacity');
     return saved ? parseFloat(saved) : 0.95;
@@ -85,7 +136,6 @@ export const SeatingCanvas: React.FC<SeatingCanvasProps> = ({
   const [bgHeight, setBgHeight] = useState<number>(() => {
     const saved = localStorage.getItem('silpa_bhirasri_plan_bg_h');
     const val = saved ? parseFloat(saved) : 450;
-    // Cap at 450 to ensure zero overlap with Pink/Yellow seating zones at y=570
     return isNaN(val) ? 450 : Math.min(val, 450);
   });
   const [hideVectorStage, setHideVectorStage] = useState<boolean>(() => {
@@ -97,11 +147,42 @@ export const SeatingCanvas: React.FC<SeatingCanvasProps> = ({
   const [isDragOver, setIsDragOver] = useState<boolean>(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
+  // Apply Google Drive Link or Web Image URL
+  const handleApplyDriveUrl = (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    setDriveUrlError(null);
+    const raw = driveUrlInput.trim();
+    if (!raw) {
+      handleRemoveBgImage();
+      return;
+    }
+    const directUrl = convertGoogleDriveUrl(raw);
+    if (!directUrl) {
+      setDriveUrlError('กรุณาระบุลิงก์รูปภาพที่ถูกต้อง');
+      return;
+    }
+    setBgImage(directUrl);
+    setShowBgImage(true);
+    localStorage.setItem('silpa_bhirasri_plan_bg_image', directUrl);
+    localStorage.setItem('silpa_bhirasri_plan_drive_url', raw);
+  };
+
+  // Remove Background Image completely (clear to clean background)
+  const handleRemoveBgImage = () => {
+    setBgImage(null);
+    setDriveUrlInput('');
+    setDriveUrlError(null);
+    localStorage.removeItem('silpa_bhirasri_plan_bg_image');
+    localStorage.removeItem('silpa_bhirasri_plan_drive_url');
+    localStorage.removeItem('silpa_bhirasri_system_default_image');
+    if (fileInputRef.current) fileInputRef.current.value = '';
+  };
+
   // Hand-drawing tools
   const [isDrawingMode, setIsDrawingMode] = useState<boolean>(false);
   const drawingTools = useDrawingCanvas(isDrawingMode);
 
-  // Handle Plan Image Upload
+  // Handle Plan Image Upload (local file alternative)
   const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
@@ -113,7 +194,6 @@ export const SeatingCanvas: React.FC<SeatingCanvasProps> = ({
           setShowBgImage(true);
           setBgPlacement('stage');
           localStorage.setItem('silpa_bhirasri_plan_bg_image', base64);
-          localStorage.setItem('silpa_bhirasri_system_default_image', base64);
           localStorage.setItem('silpa_bhirasri_plan_show_bg_image', 'true');
           localStorage.setItem('silpa_bhirasri_plan_bg_placement', 'stage');
         }
@@ -136,7 +216,6 @@ export const SeatingCanvas: React.FC<SeatingCanvasProps> = ({
             setShowBgImage(true);
             setBgPlacement('stage');
             localStorage.setItem('silpa_bhirasri_plan_bg_image', base64);
-            localStorage.setItem('silpa_bhirasri_system_default_image', base64);
             localStorage.setItem('silpa_bhirasri_plan_show_bg_image', 'true');
             localStorage.setItem('silpa_bhirasri_plan_bg_placement', 'stage');
           }
@@ -144,13 +223,6 @@ export const SeatingCanvas: React.FC<SeatingCanvasProps> = ({
         reader.readAsDataURL(file);
       }
     }
-  };
-
-  const handleResetBgImage = () => {
-    setBgImage(DEFAULT_SYSTEM_BG);
-    localStorage.setItem('silpa_bhirasri_plan_bg_image', DEFAULT_SYSTEM_BG);
-    localStorage.removeItem('silpa_bhirasri_system_default_image');
-    if (fileInputRef.current) fileInputRef.current.value = '';
   };
 
   const handleOpacityChange = (val: number) => {
@@ -433,20 +505,28 @@ export const SeatingCanvas: React.FC<SeatingCanvasProps> = ({
       )}
 
       {/* ============================================================ */}
-      {/* IMAGE SETTINGS MODAL (Horizontal Two-Column Layout like Reference) */}
+      {/* IMAGE SETTINGS MODAL (Google Drive Link Embedding & Controls) */}
       {/* ============================================================ */}
       {isImageModalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 backdrop-blur-xs p-3 sm:p-5 no-print animate-in fade-in duration-150">
           <div className="bg-white rounded-2xl shadow-2xl border border-slate-200/80 max-w-4xl w-full flex flex-col max-h-[92vh] overflow-hidden">
             {/* Modal Header */}
             <div className="flex items-center justify-between px-5 sm:px-6 py-3.5 border-b border-slate-100 shrink-0">
-              <h3 className="font-bold text-slate-900 text-sm sm:text-base">
-                ตั้งค่ารูปภาพผังพิธีการ (Seating Plan Overlay)
-              </h3>
+              <div className="flex items-center gap-2">
+                <div className="w-8 h-8 rounded-lg bg-blue-100 text-blue-700 flex items-center justify-center">
+                  <LinkIcon className="w-4 h-4" />
+                </div>
+                <div>
+                  <h3 className="font-bold text-slate-900 text-sm sm:text-base">
+                    ฝังลิงก์ภาพผังที่นั่งจาก Google Drive
+                  </h3>
+                  <p className="text-[11px] text-slate-500">จัดการรูปภาพพื้นหลังผังพิธีการด้วยลิงก์ภายนอก</p>
+                </div>
+              </div>
               <button
                 type="button"
                 onClick={() => setIsImageModalOpen(false)}
-                className="p-1 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition-colors cursor-pointer"
+                className="p-1.5 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition-colors cursor-pointer"
                 title="ปิดหน้าต่าง"
               >
                 <X className="w-4 h-4" />
@@ -456,96 +536,145 @@ export const SeatingCanvas: React.FC<SeatingCanvasProps> = ({
             {/* Modal Body: Two-Column Horizontal Grid */}
             <div className="grid grid-cols-1 md:grid-cols-12 divide-y md:divide-y-0 md:divide-x divide-slate-200/80 overflow-y-auto flex-1">
               
-              {/* LEFT COLUMN: Project Starter / Info / Upload (~40%) */}
-              <div className="md:col-span-5 p-5 sm:p-6 bg-slate-50/50 flex flex-col justify-between space-y-4">
+              {/* LEFT COLUMN: Google Drive Instructions & Current Image Status (~42%) */}
+              <div className="md:col-span-5 p-5 sm:p-6 bg-slate-50/70 flex flex-col justify-between space-y-4">
                 <div className="space-y-4">
-                  {/* Starter Box */}
-                  <div className="flex items-center gap-3">
-                    <div className="w-10 h-10 rounded-xl bg-white border border-slate-200 shadow-2xs flex items-center justify-center text-slate-800 shrink-0">
-                      <ImageIcon className="w-5 h-5 text-indigo-600" />
+                  {/* Guide Box: How to share from Google Drive */}
+                  <div className="p-3.5 bg-blue-50/80 rounded-xl border border-blue-200/80 text-xs space-y-2">
+                    <div className="flex items-center gap-1.5 font-bold text-blue-900">
+                      <ExternalLink className="w-3.5 h-3.5" />
+                      <span>วิธีนำลิงก์รูปภาพจาก Google Drive มาใช้:</span>
                     </div>
-                    <div>
-                      <h4 className="font-bold text-slate-900 text-sm">ผังพิธีการวันศิลป์ พีระศรี</h4>
-                      <p className="text-[11px] text-slate-500">จัดการรูปภาพและพิกัดผังที่นั่ง</p>
-                    </div>
-                  </div>
-
-                  <hr className="border-slate-200/70" />
-
-                  {/* Description Section */}
-                  <div>
-                    <h5 className="text-xs font-bold text-slate-900 mb-1">คำอธิบาย (Description)</h5>
-                    <p className="text-xs text-slate-600 leading-relaxed">
-                      ปรับแต่งการฝังรูปภาพผังพิธีการลงบนผังที่นั่ง โดยสามารถเลือกแสดงเฉพาะส่วนลานพิธีการเพื่อไม่ให้ทับซ้อนเก้าอี้ หรือแสดงครอบคลุมเต็มผัง
+                    <ol className="list-decimal list-inside space-y-1.5 text-blue-950 text-[11px] leading-relaxed">
+                      <li>อัปโหลดรูปผังที่นั่งขึ้น <strong>Google Drive</strong></li>
+                      <li>คลิกขวาที่ไฟล์ภาพ เลือกเมนู <strong>แชร์ (Share)</strong></li>
+                      <li>ในการเข้าถึงทั่วไป เลือกเป็น <strong>"ทุกคนที่มีลิงก์" (Anyone with the link)</strong></li>
+                      <li>กด <strong>คัดลอกลิงก์ (Copy link)</strong> แล้วนำมาวางในช่องด้านขวา</li>
+                    </ol>
+                    <p className="text-[10px] text-blue-700/90 pt-1 border-t border-blue-200/60">
+                      * ระบบจะแปลงลิงก์ Drive เป็นภาพแสดงผลโดยอัตโนมัติ
                     </p>
                   </div>
 
-                  {/* Info Section */}
+                  {/* Status Section */}
                   <div>
-                    <h5 className="text-xs font-bold text-slate-900 mb-1">ข้อมูลสถานะ (Info)</h5>
-                    <div className="p-2.5 bg-white rounded-xl border border-slate-200 text-xs space-y-1.5">
+                    <h5 className="text-xs font-bold text-slate-900 mb-1.5">ข้อมูลสถานะ (Status)</h5>
+                    <div className="p-3 bg-white rounded-xl border border-slate-200 text-xs space-y-2 shadow-2xs">
                       <div className="flex items-center justify-between">
-                        <span className="text-slate-500">ผังปัจจุบัน:</span>
+                        <span className="text-slate-500">ภาพผังปัจจุบัน:</span>
                         <span className={`font-semibold px-2 py-0.5 rounded-full text-[11px] ${
-                          bgImage && bgImage !== DEFAULT_SYSTEM_BG 
+                          bgImage 
                             ? 'bg-emerald-100 text-emerald-800' 
-                            : 'bg-indigo-100 text-indigo-800'
+                            : 'bg-slate-100 text-slate-600'
                         }`}>
-                          {bgImage && bgImage !== DEFAULT_SYSTEM_BG ? '✓ รูปที่อัปโหลด' : '🏛️ ผังเริ่มต้น 100%'}
+                          {bgImage ? '✓ มีภาพพื้นหลังแล้ว' : '⚪ ไม่มีภาพ (พื้นหลังว่าง)'}
                         </span>
                       </div>
                       <div className="flex items-center justify-between text-[11px] text-slate-500">
-                        <span>การแสดงผล:</span>
+                        <span>โหมดตำแหน่ง:</span>
                         <span className="font-medium text-slate-700">
-                          {bgPlacement === 'stage' ? 'ลานพิธีการ (ไม่ทับเก้าอี้)' : 'เต็มผังทั้งหมด'}
+                          {bgPlacement === 'stage' ? 'เฉพาะลานพิธีการ' : 'เต็มผังทั้งหมด'}
+                        </span>
+                      </div>
+                      <div className="flex items-center justify-between text-[11px] text-slate-500">
+                        <span>ความโปร่งใส:</span>
+                        <span className="font-medium text-slate-700">
+                          {Math.round(bgOpacity * 100)}%
                         </span>
                       </div>
                     </div>
                   </div>
 
-                  {/* Upload Image Section */}
-                  <div>
-                    <label className="block text-xs font-bold text-slate-900 mb-1.5">
-                      อัปโหลดรูปผังใหม่ (Upload Image)
-                    </label>
-                    <div className="relative">
-                      <input
-                        ref={fileInputRef}
-                        type="file"
-                        accept="image/*"
-                        onChange={handleImageUpload}
-                        className="hidden"
-                        id="modal-plan-image-upload"
-                      />
-                      <label
-                        htmlFor="modal-plan-image-upload"
-                        className="w-full py-2.5 px-3 bg-white hover:bg-slate-50 border border-dashed border-indigo-300 hover:border-indigo-500 rounded-xl flex items-center justify-center gap-2 cursor-pointer transition-colors shadow-2xs group"
+                  {/* Image Preview if available */}
+                  {bgImage && (
+                    <div>
+                      <h5 className="text-xs font-bold text-slate-900 mb-1.5">ตัวอย่างภาพที่กำลังใช้งาน:</h5>
+                      <div className="relative rounded-xl border border-slate-200 bg-slate-100 p-1.5 overflow-hidden flex items-center justify-center max-h-36">
+                        <img 
+                          src={bgImage} 
+                          alt="ผังที่นั่งที่ฝังอยู่" 
+                          className="max-h-32 w-auto object-contain rounded-lg shadow-2xs"
+                          onError={(e) => {
+                            (e.currentTarget as HTMLElement).style.display = 'none';
+                          }}
+                        />
+                      </div>
+                      <button
+                        type="button"
+                        onClick={handleRemoveBgImage}
+                        className="mt-2 w-full py-1.5 px-3 bg-rose-50 hover:bg-rose-100 text-rose-700 font-semibold text-xs rounded-xl border border-rose-200 transition-colors flex items-center justify-center gap-1.5 cursor-pointer"
                       >
-                        <Upload className="w-4 h-4 text-indigo-600 group-hover:scale-110 transition-transform" />
-                        <span className="text-xs font-semibold text-slate-700">คลิกเพื่อเลือกไฟล์รูปภาพ</span>
-                      </label>
+                        <Trash2 className="w-3.5 h-3.5" />
+                        <span>ลบภาพผังนี้ออก (ให้พื้นหลังว่าง)</span>
+                      </button>
                     </div>
-                    <p className="text-[11px] text-slate-400 mt-1">
-                      รองรับ PNG, JPG หรือลากไฟล์มาวางบนผังได้โดยตรง
-                    </p>
-                  </div>
+                  )}
                 </div>
               </div>
 
-              {/* RIGHT COLUMN: Numbered Step Controls like Reference Image (~60%) */}
+              {/* RIGHT COLUMN: Link Input & Adjustment Controls (~58%) */}
               <div className="md:col-span-7 p-5 sm:p-6 space-y-4 overflow-y-auto">
                 
-                {/* 1 Select Placement */}
-                <div className="space-y-1.5">
+                {/* 1 Google Drive Link Input Form */}
+                <div className="space-y-2">
                   <label className="flex items-center gap-2 text-xs font-bold text-slate-900">
-                    <span className="w-4 h-4 rounded-full bg-slate-200 text-slate-700 text-[10px] flex items-center justify-center font-bold">1</span>
-                    <span>เลือกรูปแบบการแสดงผล (Placement Mode)</span>
+                    <span className="w-4 h-4 rounded-full bg-blue-600 text-white text-[10px] flex items-center justify-center font-bold">1</span>
+                    <span>ลิงก์ภาพจาก Google Drive หรือ Web Image URL</span>
+                  </label>
+                  
+                  <form onSubmit={handleApplyDriveUrl} className="space-y-2">
+                    <div className="flex gap-2">
+                      <div className="relative flex-1">
+                        <input
+                          type="url"
+                          value={driveUrlInput}
+                          onChange={(e) => setDriveUrlInput(e.target.value)}
+                          placeholder="วางลิงก์ เช่น https://drive.google.com/file/d/.../view"
+                          className="w-full pl-3 pr-8 py-2 bg-white border border-slate-300 rounded-xl text-xs font-mono text-slate-800 shadow-2xs focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                        />
+                        {driveUrlInput && (
+                          <button
+                            type="button"
+                            onClick={() => setDriveUrlInput('')}
+                            className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
+                            title="ล้างข้อความ"
+                          >
+                            <X className="w-3.5 h-3.5" />
+                          </button>
+                        )}
+                      </div>
+                      <button
+                        type="submit"
+                        className="px-3.5 py-2 bg-blue-600 hover:bg-blue-700 text-white font-semibold text-xs rounded-xl shadow-2xs transition-colors flex items-center gap-1.5 cursor-pointer shrink-0"
+                      >
+                        <Check className="w-3.5 h-3.5" />
+                        <span>บันทึกและใช้งานลิงก์</span>
+                      </button>
+                    </div>
+
+                    {driveUrlError && (
+                      <p className="text-xs text-rose-600 font-medium pl-1">
+                        {driveUrlError}
+                      </p>
+                    )}
+
+                    <p className="text-[11px] text-slate-500 pl-1">
+                      รองรับลิงก์ทุกรูปแบบของ Google Drive (ทั้ง /file/d/..., open?id=..., uc?id=...) หรือ Direct Image URL (png, jpg, webp)
+                    </p>
+                  </form>
+                </div>
+
+                {/* 2 Select Placement Mode */}
+                <div className="space-y-1.5 pt-1 border-t border-slate-200/60">
+                  <label className="flex items-center gap-2 text-xs font-bold text-slate-900">
+                    <span className="w-4 h-4 rounded-full bg-slate-200 text-slate-700 text-[10px] flex items-center justify-center font-bold">2</span>
+                    <span>เลือกรูปแบบการแสดงผลภาพ (Placement Mode)</span>
                   </label>
                   <div className="relative">
                     <select
                       value={bgPlacement}
                       onChange={(e) => handlePlacementChange(e.target.value as BgPlacementMode)}
-                      className="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl text-xs font-medium text-slate-800 shadow-2xs focus:outline-none focus:ring-2 focus:ring-indigo-500 cursor-pointer"
+                      className="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl text-xs font-medium text-slate-800 shadow-2xs focus:outline-none focus:ring-2 focus:ring-blue-500 cursor-pointer"
                     >
                       <option value="stage">🎯 เฉพาะส่วนลานพิธีการ (Stage Courtyard) — ไม่ทับซ้อนเก้าอี้</option>
                       <option value="full">🗺️ เต็มผังทั้งหมด (Full Canvas 1150×780)</option>
@@ -553,15 +682,15 @@ export const SeatingCanvas: React.FC<SeatingCanvasProps> = ({
                   </div>
                   <p className="text-[11px] text-slate-500 pl-6">
                     {bgPlacement === 'stage' 
-                      ? 'แนะนำ: วางรูปภาพเฉพาะพื้นที่ลานพิธีตรงกลาง เว้นระยะไม่ทับเก้าอี้ A–H และ I, J, K' 
+                      ? 'แนะนำ: วางรูปภาพเฉพาะพื้นที่ลานพิธีตรงกลาง เว้นระยะไม่ทับเก้าอี้โซนต่างๆ' 
                       : 'ขยายภาพครอบคลุมทั้งผังที่นั่ง'}
                   </p>
                 </div>
 
-                {/* 2 Opacity & Visibility */}
-                <div className="space-y-1.5 pt-1">
+                {/* 3 Opacity & Visibility */}
+                <div className="space-y-1.5 pt-1 border-t border-slate-200/60">
                   <label className="flex items-center gap-2 text-xs font-bold text-slate-900">
-                    <span className="w-4 h-4 rounded-full bg-slate-200 text-slate-700 text-[10px] flex items-center justify-center font-bold">2</span>
+                    <span className="w-4 h-4 rounded-full bg-slate-200 text-slate-700 text-[10px] flex items-center justify-center font-bold">3</span>
                     <span>ปรับความโปร่งใสและการแสดงผล (Opacity & Visibility)</span>
                   </label>
                   <div className="p-3 bg-slate-50 rounded-xl border border-slate-200 space-y-2.5 text-xs">
@@ -577,19 +706,7 @@ export const SeatingCanvas: React.FC<SeatingCanvasProps> = ({
                         step="0.05"
                         value={bgOpacity}
                         onChange={(e) => handleOpacityChange(parseFloat(e.target.value))}
-                        className="w-32 accent-indigo-600 cursor-pointer"
-                      />
-                    </div>
-                    <div className="flex items-center justify-between pt-1 border-t border-slate-200/60">
-                      <label htmlFor="modal-hide-vector-cb" className="text-slate-600 cursor-pointer select-none">
-                        ซ่อนเส้นเวกเตอร์ลานพิธี (เพื่อความคมชัดของภาพ):
-                      </label>
-                      <input
-                        id="modal-hide-vector-cb"
-                        type="checkbox"
-                        checked={hideVectorStage}
-                        onChange={(e) => handleToggleHideVectorStage(e.target.checked)}
-                        className="w-4 h-4 text-indigo-600 rounded cursor-pointer accent-indigo-600"
+                        className="w-32 accent-blue-600 cursor-pointer"
                       />
                     </div>
                     <div className="flex items-center justify-between pt-1 border-t border-slate-200/60">
@@ -597,7 +714,7 @@ export const SeatingCanvas: React.FC<SeatingCanvasProps> = ({
                       <button
                         type="button"
                         onClick={() => setShowBgImage(!showBgImage)}
-                        className="flex items-center gap-1 text-xs font-medium text-indigo-600 hover:text-indigo-800 cursor-pointer"
+                        className="flex items-center gap-1 text-xs font-medium text-blue-600 hover:text-blue-800 cursor-pointer"
                       >
                         {showBgImage ? <Eye className="w-3.5 h-3.5" /> : <EyeOff className="w-3.5 h-3.5" />}
                         <span>{showBgImage ? 'กำลังเปิดแสดง' : 'ซ่อนชั่วคราว'}</span>
@@ -606,23 +723,23 @@ export const SeatingCanvas: React.FC<SeatingCanvasProps> = ({
                   </div>
                 </div>
 
-                {/* 3 Fine-tune Bounds (Only in Stage Placement) */}
+                {/* 4 Fine-tune Bounds (Only in Stage Placement) */}
                 {bgPlacement === 'stage' && (
-                  <div className="space-y-1.5 pt-1">
+                  <div className="space-y-1.5 pt-1 border-t border-slate-200/60">
                     <div className="flex items-center justify-between">
                       <label className="flex items-center gap-2 text-xs font-bold text-slate-900">
-                        <span className="w-4 h-4 rounded-full bg-slate-200 text-slate-700 text-[10px] flex items-center justify-center font-bold">3</span>
+                        <span className="w-4 h-4 rounded-full bg-slate-200 text-slate-700 text-[10px] flex items-center justify-center font-bold">4</span>
                         <span>ปรับขนาดและตำแหน่งในลานพิธี (Fine-tune Bounds)</span>
                       </label>
                       <button
                         type="button"
                         onClick={handleResetPlacementBounds}
-                        className="text-[11px] text-indigo-600 hover:text-indigo-800 font-bold hover:underline cursor-pointer flex items-center gap-1"
+                        className="text-[11px] text-blue-600 hover:text-blue-800 font-bold hover:underline cursor-pointer flex items-center gap-1"
                       >
-                        🎯 รีเซ็ตพอดีลานพิธี
+                        🎯 พอดีลานพิธี
                       </button>
                     </div>
-                    <div className="p-2.5 bg-indigo-50/40 rounded-xl border border-indigo-100 grid grid-cols-2 gap-2 text-[11px] text-slate-600">
+                    <div className="p-2.5 bg-blue-50/40 rounded-xl border border-blue-100 grid grid-cols-2 gap-2 text-[11px] text-slate-600">
                       <div>
                         <span className="block text-[10px] text-slate-500">ตำแหน่ง X: {bgX}px</span>
                         <input
@@ -635,7 +752,7 @@ export const SeatingCanvas: React.FC<SeatingCanvasProps> = ({
                             setBgX(val);
                             localStorage.setItem('silpa_bhirasri_plan_bg_x', val.toString());
                           }}
-                          className="w-full accent-indigo-600 cursor-pointer"
+                          className="w-full accent-blue-600 cursor-pointer"
                         />
                       </div>
                       <div>
@@ -650,7 +767,7 @@ export const SeatingCanvas: React.FC<SeatingCanvasProps> = ({
                             setBgY(val);
                             localStorage.setItem('silpa_bhirasri_plan_bg_y', val.toString());
                           }}
-                          className="w-full accent-indigo-600 cursor-pointer"
+                          className="w-full accent-blue-600 cursor-pointer"
                         />
                       </div>
                       <div>
@@ -665,7 +782,7 @@ export const SeatingCanvas: React.FC<SeatingCanvasProps> = ({
                             setBgWidth(val);
                             localStorage.setItem('silpa_bhirasri_plan_bg_w', val.toString());
                           }}
-                          className="w-full accent-indigo-600 cursor-pointer"
+                          className="w-full accent-blue-600 cursor-pointer"
                         />
                       </div>
                       <div>
@@ -680,95 +797,68 @@ export const SeatingCanvas: React.FC<SeatingCanvasProps> = ({
                             setBgHeight(val);
                             localStorage.setItem('silpa_bhirasri_plan_bg_h', val.toString());
                           }}
-                          className="w-full accent-indigo-600 cursor-pointer"
+                          className="w-full accent-blue-600 cursor-pointer"
                         />
                       </div>
                     </div>
                   </div>
                 )}
 
-                {/* 4 System Presets & Actions */}
-                <div className="space-y-2 pt-1">
+                {/* 5 Optional Local File Upload */}
+                <div className="space-y-1.5 pt-1 border-t border-slate-200/60">
                   <label className="flex items-center gap-2 text-xs font-bold text-slate-900">
-                    <span className="w-4 h-4 rounded-full bg-slate-200 text-slate-700 text-[10px] flex items-center justify-center font-bold">4</span>
-                    <span>การตั้งค่าระบบ (System Presets)</span>
+                    <span className="w-4 h-4 rounded-full bg-slate-200 text-slate-700 text-[10px] flex items-center justify-center font-bold">5</span>
+                    <span>ทางเลือกเสริม: เลือกไฟล์ภาพจากเครื่องคอมพิวเตอร์</span>
                   </label>
-                  <div className="grid grid-cols-1 gap-2">
-                    {bgImage && (
-                      <button
-                        type="button"
-                        onClick={() => {
-                          localStorage.setItem('silpa_bhirasri_system_default_image', bgImage);
-                          localStorage.setItem('silpa_bhirasri_plan_bg_image', bgImage);
-                          setIsDefaultConfirmed(true);
-                          setTimeout(() => setIsDefaultConfirmed(false), 2500);
-                        }}
-                        className="w-full py-2 px-3 bg-amber-50 hover:bg-amber-100 text-amber-900 font-bold text-xs rounded-xl flex items-center justify-center gap-2 border border-amber-200 transition-colors shadow-2xs cursor-pointer"
-                      >
-                        <Check className="w-4 h-4 text-amber-600" />
-                        <span>{isDefaultConfirmed ? '✓ บันทึกรูปผังนี้เป็นผังเริ่มต้นของระบบแล้ว' : '⭐ ใช้รูปนี้เป็นรูปผังเริ่มต้นของระบบ (Default)'}</span>
-                      </button>
-                    )}
-
-                    <div className="flex items-center gap-2">
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setBgImage(DEFAULT_SYSTEM_BG);
-                          localStorage.setItem('silpa_bhirasri_plan_bg_image', DEFAULT_SYSTEM_BG);
-                          localStorage.setItem('silpa_bhirasri_system_default_image', DEFAULT_SYSTEM_BG);
-                          setBgPlacement('stage');
-                          localStorage.setItem('silpa_bhirasri_plan_bg_placement', 'stage');
-                          setBgX(36);
-                          localStorage.setItem('silpa_bhirasri_plan_bg_x', '36');
-                          setBgY(104);
-                          localStorage.setItem('silpa_bhirasri_plan_bg_y', '104');
-                          setBgWidth(828);
-                          localStorage.setItem('silpa_bhirasri_plan_bg_w', '828');
-                          setBgHeight(472);
-                          localStorage.setItem('silpa_bhirasri_plan_bg_h', '472');
-                          setShowBgImage(true);
-                          setHideVectorStage(false);
-                          localStorage.setItem('silpa_bhirasri_plan_hide_vector_stage', 'false');
-                        }}
-                        className="flex-1 py-2 px-3 bg-indigo-50 hover:bg-indigo-100 text-indigo-900 font-semibold text-xs rounded-xl flex items-center justify-center gap-1.5 border border-indigo-200 transition-colors"
-                      >
-                        <span>🎯 คืนค่าผังทางการ 100%</span>
-                      </button>
-
-                      {bgImage && bgImage !== DEFAULT_SYSTEM_BG && (
-                        <button
-                          type="button"
-                          onClick={handleResetBgImage}
-                          className="py-2 px-3 bg-rose-50 hover:bg-rose-100 text-rose-700 font-semibold text-xs rounded-xl flex items-center justify-center gap-1.5 border border-rose-200 transition-colors"
-                        >
-                          <Trash2 className="w-3.5 h-3.5" />
-                          <span>รีเซ็ตภาพ</span>
-                        </button>
-                      )}
-                    </div>
+                  <div className="relative">
+                    <input
+                      ref={fileInputRef}
+                      type="file"
+                      accept="image/*"
+                      onChange={handleImageUpload}
+                      className="hidden"
+                      id="modal-plan-image-upload"
+                    />
+                    <label
+                      htmlFor="modal-plan-image-upload"
+                      className="w-full py-2 px-3 bg-white hover:bg-slate-50 border border-dashed border-slate-300 hover:border-blue-400 rounded-xl flex items-center justify-center gap-2 cursor-pointer transition-colors shadow-2xs group"
+                    >
+                      <Upload className="w-3.5 h-3.5 text-slate-500 group-hover:text-blue-600 transition-colors" />
+                      <span className="text-xs font-medium text-slate-700">อัปโหลดไฟล์รูปภาพ (PNG, JPG)</span>
+                    </label>
                   </div>
                 </div>
 
               </div>
             </div>
 
-            {/* Modal Footer: Matching Reference Image (Cancel left, Initialize/Finish right) */}
+            {/* Modal Footer */}
             <div className="px-5 sm:px-6 py-3.5 bg-white border-t border-slate-100 flex items-center justify-between shrink-0">
               <button
                 type="button"
                 onClick={() => setIsImageModalOpen(false)}
                 className="px-4 py-2 bg-white hover:bg-slate-50 text-slate-700 font-semibold text-xs rounded-xl border border-slate-300 shadow-2xs transition-colors cursor-pointer"
               >
-                ยกเลิก (Cancel)
+                ปิดหน้าต่าง
               </button>
-              <button
-                type="button"
-                onClick={() => setIsImageModalOpen(false)}
-                className="px-5 py-2 bg-slate-900 hover:bg-slate-800 text-white font-semibold text-xs rounded-xl shadow-xs transition-colors cursor-pointer"
-              >
-                บันทึกและเสร็จสิ้น
-              </button>
+              <div className="flex items-center gap-2">
+                {bgImage && (
+                  <button
+                    type="button"
+                    onClick={handleRemoveBgImage}
+                    className="px-3 py-2 bg-rose-50 hover:bg-rose-100 text-rose-700 font-semibold text-xs rounded-xl border border-rose-200 transition-colors cursor-pointer"
+                  >
+                    ลบภาพออก
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={() => setIsImageModalOpen(false)}
+                  className="px-5 py-2 bg-slate-900 hover:bg-slate-800 text-white font-semibold text-xs rounded-xl shadow-xs transition-colors cursor-pointer"
+                >
+                  เสร็จสิ้น
+                </button>
+              </div>
             </div>
           </div>
         </div>
@@ -783,34 +873,39 @@ export const SeatingCanvas: React.FC<SeatingCanvasProps> = ({
         onDragLeave={() => setIsDragOver(false)}
         onDrop={handleCanvasFileDrop}
       >
-        {/* Quick Image Overlay Notice / Banner (Horizontal Elongated Layout, Fits Screen & Mobile) */}
-        <div className="w-full max-w-full mb-2 sm:mb-2.5 px-2.5 sm:px-4 py-1.5 sm:py-2 bg-gradient-to-r from-indigo-50/95 via-sky-50/80 to-indigo-50/95 border border-indigo-200/80 rounded-xl flex flex-row items-center justify-between gap-1.5 sm:gap-4 text-xs shadow-2xs no-print overflow-hidden">
-          <div className="flex items-center gap-1.5 sm:gap-2 text-indigo-950 min-w-0 flex-1">
-            <span className="p-1 rounded-md bg-indigo-100 text-indigo-700 shrink-0">
-              <ImageIcon className="w-3.5 h-3.5" />
+        {/* Quick Image Overlay Notice / Banner (Google Drive Status) */}
+        <div className="w-full max-w-[1150px] mb-2 sm:mb-2.5 px-3 sm:px-4 py-1.5 sm:py-2 bg-white border border-slate-200/90 rounded-xl flex flex-row items-center justify-between gap-2 text-xs shadow-2xs no-print overflow-hidden">
+          <div className="flex items-center gap-2 text-slate-900 min-w-0 flex-1">
+            <span className={`p-1.5 rounded-lg shrink-0 ${bgImage ? 'bg-blue-100 text-blue-700' : 'bg-slate-100 text-slate-500'}`}>
+              {bgImage ? <LinkIcon className="w-3.5 h-3.5" /> : <ImageIcon className="w-3.5 h-3.5" />}
             </span>
-            <div className="flex items-center gap-1 truncate text-[11px] sm:text-xs">
-              <span className="font-bold text-indigo-950 shrink-0">ผังพิธีการ:</span>
-              <span className="text-indigo-800 truncate">
-                {bgImage && bgImage !== DEFAULT_SYSTEM_BG ? (
-                  <>✅ ใช้รูปผังที่อัปโหลด ({bgPlacement === 'stage' ? 'ตำแหน่งลานพิธี' : 'เต็มผัง'})</>
+            <div className="flex items-center gap-1.5 truncate text-[11px] sm:text-xs">
+              <span className="font-bold text-slate-900 shrink-0">ภาพผังพื้นหลัง:</span>
+              <span className="text-slate-700 truncate">
+                {bgImage ? (
+                  <>
+                    <span className="text-blue-700 font-semibold">🔗 ฝังภาพจาก Google Drive / ลิงก์รูปภาพแล้ว</span>
+                    <span className="text-slate-500 ml-1">({bgPlacement === 'stage' ? 'ตำแหน่งลานพิธี' : 'เต็มผัง'})</span>
+                  </>
                 ) : (
-                  <>🏛️ ผังพิธีการวันศิลป์ พีระศรี 100% (ผังเริ่มต้น)</>
+                  <span className="text-slate-500 font-normal">ไม่มีภาพพื้นหลัง (นำภาพเดิมที่มากับระบบออกแล้ว)</span>
                 )}
               </span>
-              <span className="hidden lg:inline-block text-indigo-600/80 shrink-0 text-[11px]">
-                • ความทึบ {Math.round(bgOpacity * 100)}%
-              </span>
+              {bgImage && (
+                <span className="hidden lg:inline-block text-slate-400 shrink-0 text-[11px]">
+                  • ความทึบ {Math.round(bgOpacity * 100)}%
+                </span>
+              )}
             </div>
           </div>
 
-          <div className="flex items-center gap-1 sm:gap-1.5 shrink-0">
+          <div className="flex items-center gap-1.5 shrink-0">
             {bgImage && (
               <button
                 type="button"
                 onClick={handleResetPlacementBounds}
-                className="px-2 py-1 text-indigo-700 bg-white hover:bg-indigo-50 border border-indigo-200 rounded-lg transition-colors text-xs font-medium cursor-pointer whitespace-nowrap hidden md:inline-flex items-center"
-                title="ปรับขนาดและตำแหน่งพอดีลานพิธีการ ไม่ยืดไม่หด ไม่ซ้อนที่นั่ง"
+                className="px-2.5 py-1 text-slate-700 bg-slate-50 hover:bg-slate-100 border border-slate-200 rounded-lg transition-colors text-xs font-medium cursor-pointer whitespace-nowrap hidden md:inline-flex items-center"
+                title="ปรับขนาดและตำแหน่งพอดีลานพิธีการ"
               >
                 🎯 พอดีลานพิธี
               </button>
@@ -818,21 +913,24 @@ export const SeatingCanvas: React.FC<SeatingCanvasProps> = ({
             <button
               type="button"
               onClick={() => setIsImageModalOpen(true)}
-              className="px-2 sm:px-2.5 py-1 bg-indigo-600 hover:bg-indigo-700 text-white font-medium rounded-lg shadow-2xs transition-colors flex items-center gap-1 cursor-pointer whitespace-nowrap text-xs"
-              title="ตั้งค่าหรือเปลี่ยนรูปผัง"
+              className={`px-3 py-1 font-semibold rounded-lg shadow-2xs transition-colors flex items-center gap-1.5 cursor-pointer whitespace-nowrap text-xs ${
+                bgImage 
+                  ? 'bg-blue-50 text-blue-700 hover:bg-blue-100 border border-blue-200' 
+                  : 'bg-blue-600 hover:bg-blue-700 text-white'
+              }`}
+              title="ตั้งค่าหรือเปลี่ยนลิงก์ Google Drive"
             >
-              <Upload className="w-3.5 h-3.5 shrink-0" />
-              <span className="hidden sm:inline">{bgImage ? '⚙️ ปรับแต่ง/เปลี่ยนภาพ' : '📸 ฝังรูปภาพทับผัง'}</span>
-              <span className="sm:hidden">{bgImage ? 'เปลี่ยนภาพ' : 'ฝังภาพ'}</span>
+              <LinkIcon className="w-3.5 h-3.5 shrink-0" />
+              <span>{bgImage ? '⚙️ จัดการลิงก์ Google Drive' : '🔗 ฝังลิงก์ภาพจาก Google Drive'}</span>
             </button>
-            {bgImage && bgImage !== DEFAULT_SYSTEM_BG && (
+            {bgImage && (
               <button
                 type="button"
-                onClick={handleResetBgImage}
-                className="px-1.5 sm:px-2 py-1 text-slate-500 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-colors text-xs whitespace-nowrap"
-                title="ยกเลิกการฝังภาพ (คืนค่าเริ่มต้น)"
+                onClick={handleRemoveBgImage}
+                className="px-2 py-1 text-slate-500 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-colors text-xs whitespace-nowrap cursor-pointer"
+                title="นำภาพออก (ให้พื้นหลังว่าง)"
               >
-                รีเซ็ต
+                นำภาพออก
               </button>
             )}
           </div>
@@ -840,9 +938,9 @@ export const SeatingCanvas: React.FC<SeatingCanvasProps> = ({
 
         {/* Drag Over Overlay Alert */}
         {isDragOver && (
-          <div className="w-full max-w-[1150px] mb-3 p-6 border-2 border-dashed border-indigo-500 bg-indigo-100/80 rounded-2xl text-center text-indigo-900 font-bold flex flex-col items-center justify-center animate-pulse">
-            <ImageIcon className="w-8 h-8 text-indigo-600 mb-1" />
-            <span>ปล่อยไฟล์รูปภาพ Seating Plan ที่นี่ เพื่อฝังทับลงบนผังทันที</span>
+          <div className="w-full max-w-[1150px] mb-3 p-6 border-2 border-dashed border-blue-500 bg-blue-50/90 rounded-2xl text-center text-blue-900 font-bold flex flex-col items-center justify-center animate-pulse">
+            <ImageIcon className="w-8 h-8 text-blue-600 mb-1" />
+            <span>ปล่อยไฟล์รูปภาพที่นี่ เพื่อฝังทับลงบนผัง</span>
           </div>
         )}
 
@@ -875,9 +973,9 @@ export const SeatingCanvas: React.FC<SeatingCanvasProps> = ({
             </text>
 
             {/* ============================================================ */}
-            {/* 1. CENTRAL CEREMONY COURTYARD & PATHS (100% Exact Matching File) */}
+            {/* 1. EMBEDDED SEATING PLAN IMAGE (FROM GOOGLE DRIVE LINK / URL) */}
             {/* ============================================================ */}
-            {bgImage && showBgImage && bgImage !== DEFAULT_SYSTEM_BG ? (
+            {bgImage && showBgImage ? (
               <image
                 id="embedded-seating-plan-img"
                 href={bgImage}
@@ -891,13 +989,41 @@ export const SeatingCanvas: React.FC<SeatingCanvasProps> = ({
                 className="pointer-events-none select-none"
               />
             ) : (
-              /* Exact 100% Ceremony Flow vector matching the uploaded document without modifications */
-              <ExactCeremonyCourtyard100
-                x={bgPlacement === 'full' ? 38 : bgX}
-                y={bgPlacement === 'full' ? 104 : bgY}
-                width={bgPlacement === 'full' ? 826 : Math.min(bgWidth, 864 - bgX)}
-                height={bgPlacement === 'full' ? 450 : Math.min(bgHeight, 554 - bgY)}
-              />
+              /* Clean Central Courtyard Guideline (when no image is set, original system image removed) */
+              <g id="empty-courtyard-placeholder" opacity="0.7">
+                <rect
+                  x="38"
+                  y="104"
+                  width="826"
+                  height="450"
+                  rx="10"
+                  fill="#f8fafc"
+                  stroke="#cbd5e1"
+                  strokeWidth="1.5"
+                  strokeDasharray="6 6"
+                />
+                <text
+                  x="451"
+                  y="315"
+                  textAnchor="middle"
+                  fill="#64748b"
+                  fontSize="15"
+                  fontWeight="bold"
+                  fontFamily="sans-serif"
+                >
+                  🏛️ ลานอนุสาวรีย์ศาสตราจารย์ศิลป์ พีระศรี
+                </text>
+                <text
+                  x="451"
+                  y="342"
+                  textAnchor="middle"
+                  fill="#94a3b8"
+                  fontSize="12"
+                  fontFamily="sans-serif"
+                >
+                  (นำภาพเดิมที่มากับระบบออกแล้ว — กดปุ่ม "ฝังลิงก์ภาพจาก Google Drive" ด้านบนเพื่อแสดงผังที่ต้องการ)
+                </text>
+              </g>
             )}
 
             {/* Custom User Hand-Drawn Paths */}
