@@ -1,12 +1,13 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { Seat, SeatingPlanMetadata, CeremonyRoute } from '../types';
 import { 
   Download, Copy, Check, PenTool, RotateCcw, 
-  Eye, MousePointer, Sparkles, ImageIcon, Upload
+  Eye, MousePointer, Sparkles, ImageIcon, Upload, Link as LinkIcon, ExternalLink, Sliders, X
 } from 'lucide-react';
 import { DEFAULT_CEREMONY_ROUTES, pointsToSvgPath } from '../data/defaultRoutes';
 import { RouteDrawingOverlay } from './RouteDrawingOverlay';
 import { ExactCeremonyCourtyard100 } from './ExactCeremonyCourtyard100';
+import { convertGoogleDriveUrl } from '../data/googleSheetConfig';
 
 interface CeremonyFlowMapProps {
   metadata: SeatingPlanMetadata;
@@ -33,41 +34,60 @@ export const CeremonyFlowMap: React.FC<CeremonyFlowMapProps> = ({
   const [activeFilter, setActiveFilter] = useState<FlowFilterRoute>('all');
   const [copiedSvg, setCopiedSvg] = useState<boolean>(false);
   const [isDrawingMode, setIsDrawingMode] = useState<boolean>(false);
-  const DEFAULT_SYSTEM_BG = '/assets/ceremony_flow_100.svg';
 
   const [bgImage, setBgImage] = useState<string | null>(() => {
-    return localStorage.getItem('silpa_bhirasri_plan_bg_image') || 
-      localStorage.getItem('silpa_bhirasri_system_default_image') || 
-      DEFAULT_SYSTEM_BG;
+    if (metadata.bgImageUrl) return metadata.bgImageUrl;
+    const saved = localStorage.getItem('silpa_bhirasri_plan_bg_image');
+    if (saved && !saved.includes('ceremony_flow_100.svg')) {
+      return saved;
+    }
+    const savedDrive = localStorage.getItem('silpa_bhirasri_plan_drive_url');
+    if (savedDrive) {
+      return convertGoogleDriveUrl(savedDrive);
+    }
+    return null;
   });
+
   const [showBgImage, setShowBgImage] = useState<boolean>(true);
   const [bgOpacity, setBgOpacity] = useState<number>(() => {
     const saved = localStorage.getItem('silpa_bhirasri_plan_bg_opacity');
-    return saved ? parseFloat(saved) : 1;
+    return saved ? parseFloat(saved) : 0.95;
   });
-  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [isDriveModalOpen, setIsDriveModalOpen] = useState<boolean>(false);
+  const [driveInput, setDriveInput] = useState<string>(() => {
+    return metadata.bgDriveUrl || localStorage.getItem('silpa_bhirasri_plan_drive_url') || '';
+  });
+
   const svgRef = useRef<SVGSVGElement | null>(null);
 
-  const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (file) {
-      const reader = new FileReader();
-      reader.onload = (uploadEvent) => {
-        const base64 = uploadEvent.target?.result as string;
-        if (base64) {
-          setBgImage(base64);
-          setShowBgImage(true);
-          localStorage.setItem('silpa_bhirasri_plan_bg_image', base64);
-          localStorage.setItem('silpa_bhirasri_plan_show_bg_image', 'true');
-        }
-      };
-      reader.readAsDataURL(file);
+  // Sync background image whenever metadata updates (e.g. from Google Sheets sync)
+  useEffect(() => {
+    if (metadata.bgImageUrl) {
+      setBgImage(metadata.bgImageUrl);
+      if (metadata.bgDriveUrl) {
+        setDriveInput(metadata.bgDriveUrl);
+      }
     }
-  };
+  }, [metadata.bgImageUrl, metadata.bgDriveUrl]);
 
-  const handleRemoveImage = () => {
-    setBgImage(null);
-    localStorage.removeItem('silpa_bhirasri_plan_bg_image');
+  const handleApplyDriveLink = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!driveInput.trim()) {
+      setBgImage(null);
+      localStorage.removeItem('silpa_bhirasri_plan_bg_image');
+      localStorage.removeItem('silpa_bhirasri_plan_drive_url');
+      setIsDriveModalOpen(false);
+      return;
+    }
+
+    const direct = convertGoogleDriveUrl(driveInput.trim());
+    setBgImage(direct);
+    setShowBgImage(true);
+    localStorage.setItem('silpa_bhirasri_plan_drive_url', driveInput.trim());
+    localStorage.setItem('silpa_bhirasri_plan_bg_drive_url', driveInput.trim());
+    localStorage.setItem('silpa_bhirasri_plan_bg_image', direct);
+    localStorage.setItem('silpa_bhirasri_plan_show_bg_image', 'true');
+    setIsDriveModalOpen(false);
   };
 
   const drawingTools = RouteDrawingOverlay({
@@ -139,32 +159,25 @@ export const CeremonyFlowMap: React.FC<CeremonyFlowMapProps> = ({
             </div>
 
             <div className="flex flex-wrap items-center gap-2">
-              <input
-                ref={fileInputRef}
-                type="file"
-                accept="image/*"
-                onChange={handleImageUpload}
-                className="hidden"
-              />
               <button
                 type="button"
-                onClick={() => fileInputRef.current?.click()}
+                onClick={() => setIsDriveModalOpen(true)}
                 className={`px-2.5 py-1.5 rounded-lg text-xs font-medium border flex items-center gap-1.5 transition-colors cursor-pointer ${
                   bgImage 
-                    ? 'bg-indigo-50 border-indigo-300 text-indigo-800 hover:bg-indigo-100'
+                    ? 'bg-blue-50 border-blue-300 text-blue-800 hover:bg-blue-100'
                     : 'border-slate-300 bg-white hover:bg-slate-50 text-slate-700'
                 }`}
-                title="ฝังไฟล์รูปภาพ Seating Plan.png ทับบนผัง"
+                title="ตั้งค่าภาพผังจาก Google Drive"
               >
-                <ImageIcon className="w-3.5 h-3.5 text-indigo-600" />
-                <span>{bgImage ? '📷 ภาพผังที่ฝังอยู่' : '📷 ฝังรูปภาพผังทับ'}</span>
+                <LinkIcon className="w-3.5 h-3.5 text-blue-600" />
+                <span>{bgImage ? '🖼️ ภาพผัง Google Drive (เปิดอยู่)' : '🖼️ ใส่ลิงก์ Google Drive'}</span>
               </button>
               {bgImage && (
                 <button
                   type="button"
                   onClick={() => setShowBgImage(!showBgImage)}
-                  className="px-2 py-1.5 rounded-lg text-xs font-medium border border-slate-300 bg-white hover:bg-slate-50 text-slate-600"
-                  title={showBgImage ? 'ซ่อนภาพฝัง' : 'แสดงภาพฝัง'}
+                  className="px-2 py-1.5 rounded-lg text-xs font-medium border border-slate-300 bg-white hover:bg-slate-50 text-slate-600 cursor-pointer"
+                  title={showBgImage ? 'ซ่อนภาพผัง' : 'แสดงภาพผัง'}
                 >
                   {showBgImage ? 'ซ่อนภาพ' : 'แสดงภาพ'}
                 </button>
@@ -498,6 +511,108 @@ export const CeremonyFlowMap: React.FC<CeremonyFlowMapProps> = ({
           </svg>
         </div>
       </div>
+
+      {/* Google Drive Image Link Modal */}
+      {isDriveModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-xs p-4 animate-in fade-in duration-150">
+          <div className="bg-white rounded-2xl shadow-2xl border border-slate-200 max-w-lg w-full overflow-hidden">
+            <div className="px-5 py-4 bg-slate-900 text-white flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <LinkIcon className="w-5 h-5 text-blue-400" />
+                <h3 className="font-bold text-sm sm:text-base">แก้ไขภาพผังที่นั่งด้วยลิงก์ Google Drive</h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsDriveModalOpen(false)}
+                className="p-1 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition-colors"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <form onSubmit={handleApplyDriveLink} className="p-5 space-y-4 text-xs">
+              <div className="p-3 bg-blue-50 rounded-xl border border-blue-200 text-blue-900 space-y-1.5 leading-relaxed">
+                <span className="font-bold flex items-center gap-1.5">
+                  <ExternalLink className="w-3.5 h-3.5" />
+                  วิธีนำลิงก์รูปภาพจาก Google Drive มาใช้:
+                </span>
+                <ol className="list-decimal list-inside space-y-1 text-[11px] text-blue-950">
+                  <li>อัปโหลดรูปผังที่นั่งขึ้น Google Drive</li>
+                  <li>คลิกขวาที่ไฟล์ เลือก <strong>แชร์ (Share)</strong></li>
+                  <li>ตั้งค่าเป็น <strong>"ทุกคนที่มีลิงก์มีสิทธิ์ดู" (Anyone with the link)</strong></li>
+                  <li>คัดลอกลิงก์มาวางในช่องด้านล่าง</li>
+                </ol>
+              </div>
+
+              <div className="space-y-1.5">
+                <label className="font-bold text-slate-900 block">วางลิงก์ Google Drive:</label>
+                <input
+                  type="url"
+                  value={driveInput}
+                  onChange={(e) => setDriveInput(e.target.value)}
+                  placeholder="https://drive.google.com/file/d/.../view"
+                  className="w-full px-3 py-2 bg-white border border-slate-300 rounded-xl text-xs font-mono text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                />
+              </div>
+
+              <div className="space-y-1.5">
+                <div className="flex justify-between items-center text-slate-700 font-medium">
+                  <span>ความโปร่งใสของภาพ:</span>
+                  <span>{Math.round(bgOpacity * 100)}%</span>
+                </div>
+                <input
+                  type="range"
+                  min="0.2"
+                  max="1"
+                  step="0.05"
+                  value={bgOpacity}
+                  onChange={(e) => {
+                    const val = parseFloat(e.target.value);
+                    setBgOpacity(val);
+                    localStorage.setItem('silpa_bhirasri_plan_bg_opacity', val.toString());
+                  }}
+                  className="w-full accent-blue-600 cursor-pointer"
+                />
+              </div>
+
+              {bgImage && (
+                <div className="pt-2 border-t border-slate-100 flex items-center justify-between">
+                  <span className="text-slate-500">ภาพปัจจุบันกำลังเปิดใช้งาน</span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setBgImage(null);
+                      setDriveInput('');
+                      localStorage.removeItem('silpa_bhirasri_plan_bg_image');
+                      localStorage.removeItem('silpa_bhirasri_plan_drive_url');
+                      setIsDriveModalOpen(false);
+                    }}
+                    className="text-rose-600 hover:text-rose-700 font-semibold cursor-pointer"
+                  >
+                    ลบภาพออก
+                  </button>
+                </div>
+              )}
+
+              <div className="pt-3 border-t border-slate-200 flex justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => setIsDriveModalOpen(false)}
+                  className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl font-medium transition-colors cursor-pointer"
+                >
+                  ยกเลิก
+                </button>
+                <button
+                  type="submit"
+                  className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl font-bold transition-colors cursor-pointer"
+                >
+                  บันทึกและใช้งาน
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

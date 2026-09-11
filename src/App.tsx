@@ -19,6 +19,19 @@ import { CeremonyRoute } from './types';
 import { loadCeremonyRoutes, saveCeremonyRoutes, resetCeremonyRoutes } from './data/defaultRoutes';
 import { exportSeatingPlanToPdf } from './utils/pdfExport';
 import { Check, Info, AlertCircle } from 'lucide-react';
+import { 
+  saveDriveImageLinkToGoogleSheet, 
+  extractSpreadsheetId, 
+  fetchGoogleSheetData 
+} from './utils/googleSheetSync';
+import { 
+  getConfiguredSheetUrl, 
+  getSavedDriveImageUrl, 
+  setSavedDriveImageUrl, 
+  convertGoogleDriveUrl, 
+  isAutoSyncEnabled 
+} from './data/googleSheetConfig';
+import { getAccessToken } from './utils/googleAuth';
 
 export default function App() {
   const [planState, setPlanState] = useState<SeatingPlanState>(() => loadSeatingPlan());
@@ -44,15 +57,170 @@ export default function App() {
     }, 3000);
   };
 
+  // Handler to write Google Drive plan image link back to Google Sheet
+  const handleSaveDriveLinkToGoogleSheet = async (driveUrl: string): Promise<{ success: boolean; message: string }> => {
+    const sheetUrl = getConfiguredSheetUrl();
+    if (!sheetUrl) {
+      return {
+        success: false,
+        message: 'ยังไม่ได้ระบุลิงก์ Google Sheet กรุณากดปุ่ม "ซิงก์ Google Sheets" เพื่อระบุลิงก์ตารางก่อน',
+      };
+    }
+    const spreadsheetId = extractSpreadsheetId(sheetUrl);
+    if (!spreadsheetId) {
+      return {
+        success: false,
+        message: 'ไม่สามารถระบุ Spreadsheet ID จากลิงก์ Google Sheets ได้',
+      };
+    }
+    const token = getAccessToken();
+    if (!token) {
+      return {
+        success: false,
+        message: 'ต้องเข้าสู่ระบบ Google เพื่อขอสิทธิ์แก้ไขชีต (กดที่ปุ่ม "ซิงก์ Google Sheets" แล้ว Sign in with Google)',
+      };
+    }
+    const res = await saveDriveImageLinkToGoogleSheet(spreadsheetId, token, driveUrl);
+    if (res.success) {
+      setSavedDriveImageUrl(driveUrl);
+      setPlanState(prev => ({
+        ...prev,
+        metadata: {
+          ...prev.metadata,
+          bgDriveUrl: driveUrl,
+          bgImageUrl: convertGoogleDriveUrl(driveUrl),
+        }
+      }));
+      showToast('บันทึกลิงก์ Google Drive ลง Google Sheet (#PLAN_IMAGE) สำเร็จแล้ว');
+    }
+    return res;
+  };
+
   // Google Sheet sync handler
-  const handleGoogleSheetSync = (updatedSeats: Record<string, Seat>, summaryMsg: string, unassigned?: UnassignedGuest[]) => {
+  const handleGoogleSheetSync = (
+    updatedSeats: Record<string, Seat>, 
+    summaryMsg: string, 
+    unassigned?: UnassignedGuest[],
+    planImageUrl?: string,
+    planDriveUrl?: string
+  ) => {
+    if (planDriveUrl) {
+      setSavedDriveImageUrl(planDriveUrl);
+    }
     setPlanState(prev => ({
       ...prev,
       seats: updatedSeats,
+      metadata: {
+        ...prev.metadata,
+        ...(planImageUrl ? { bgImageUrl: planImageUrl } : {}),
+        ...(planDriveUrl ? { bgDriveUrl: planDriveUrl } : {}),
+      },
       ...(unassigned ? { unassignedGuests: unassigned } : {}),
     }));
     showToast(summaryMsg);
   };
+
+  // Auto-sync on web load & tab focus (supports GitHub Pages & all browsers)
+  useEffect(() => {
+    const autoSyncFromSheet = async () => {
+      const sheetUrl = getConfiguredSheetUrl();
+      if (!sheetUrl) return;
+
+      const isEnabled = isAutoSyncEnabled();
+      if (!isEnabled) return;
+
+      try {
+        const token = getAccessToken();
+        const result = await fetchGoogleSheetData(sheetUrl, token);
+        if (result.success && result.rows.length > 0) {
+          setPlanState(prev => {
+            const nextSeats = { ...prev.seats };
+            let hasChanges = false;
+            result.rows.forEach(row => {
+              const seatId = row.seatId;
+              const existing = nextSeats[seatId];
+              if (existing) {
+                if (
+                  (row.guestName !== undefined && row.guestName !== existing.guestName) ||
+                  (row.position !== undefined && row.position !== existing.position) ||
+                  (row.organization !== undefined && row.organization !== existing.organization) ||
+                  (row.setGroup !== undefined && row.setGroup !== existing.setGroup) ||
+                  (row.hasFlowerBasket !== undefined && row.hasFlowerBasket !== existing.hasFlowerBasket) ||
+                  (row.hasArtSet !== undefined && row.hasArtSet !== existing.hasArtSet)
+                ) {
+                  hasChanges = true;
+                  nextSeats[seatId] = {
+                    ...existing,
+                    guestName: row.guestName !== undefined ? row.guestName : existing.guestName,
+                    position: row.position !== undefined ? row.position : existing.position,
+                    organization: row.organization !== undefined ? row.organization : existing.organization,
+                    setGroup: row.setGroup !== undefined ? row.setGroup : existing.setGroup,
+                    hasFlowerBasket: row.hasFlowerBasket !== undefined ? row.hasFlowerBasket : existing.hasFlowerBasket,
+                    hasArtSet: row.hasArtSet !== undefined ? row.hasArtSet : existing.hasArtSet,
+                    category: row.category || existing.category,
+                  };
+                }
+              }
+            });
+
+            const unassignedList = (result.unassigned || []).map((u, i) => ({
+              id: `UNASSIGNED-${i + 1}`,
+              name: u.guestName || '',
+              position: u.position,
+              organization: u.organization,
+              setGroup: u.setGroup,
+              hasFlowerBasket: u.hasFlowerBasket,
+              hasArtSet: u.hasArtSet,
+              status: u.status || 'confirmed',
+              notes: u.notes,
+            }));
+
+            let nextMetadata = prev.metadata;
+            if (result.planImageUrl || result.planDriveUrl) {
+              if (result.planDriveUrl) {
+                setSavedDriveImageUrl(result.planDriveUrl);
+              }
+              nextMetadata = {
+                ...prev.metadata,
+                ...(result.planImageUrl ? { bgImageUrl: result.planImageUrl } : {}),
+                ...(result.planDriveUrl ? { bgDriveUrl: result.planDriveUrl } : {}),
+              };
+            }
+
+            if (!hasChanges && unassignedList.length === 0 && !result.planImageUrl) {
+              return prev;
+            }
+
+            return {
+              ...prev,
+              seats: nextSeats,
+              metadata: nextMetadata,
+              ...(unassignedList.length > 0 ? { unassignedGuests: unassignedList } : {}),
+            };
+          });
+
+          const nowStr = new Date().toLocaleTimeString('th-TH', { hour: '2-digit', minute: '2-digit' });
+          localStorage.setItem('google_sheet_last_sync_time', nowStr);
+        }
+      } catch (err) {
+        console.warn('Silent auto-sync info:', err);
+      }
+    };
+
+    // Run on startup
+    const timer = setTimeout(autoSyncFromSheet, 600);
+
+    // Run when user switches back to browser tab
+    const handleWindowFocus = () => {
+      autoSyncFromSheet();
+    };
+    window.addEventListener('focus', handleWindowFocus);
+
+    return () => {
+      clearTimeout(timer);
+      window.removeEventListener('focus', handleWindowFocus);
+    };
+  }, []);
 
   // Assign an unassigned guest to an empty/target seat
   const handleAssignGuestToSeat = (guest: UnassignedGuest, seatId: string) => {
@@ -406,6 +574,7 @@ export default function App() {
                 onRemoveSeat={handleRemoveSeat}
                 routes={ceremonyRoutes}
                 onOpenRouteManager={() => setIsRouteModalOpen(true)}
+                onSaveDriveLinkToGoogleSheet={handleSaveDriveLinkToGoogleSheet}
               />
             )}
 
@@ -464,6 +633,8 @@ export default function App() {
         onClose={() => setIsGoogleSheetModalOpen(false)}
         seats={planState.seats}
         onApplySync={handleGoogleSheetSync}
+        currentDriveUrl={getSavedDriveImageUrl() || planState.metadata?.bgDriveUrl || undefined}
+        onDriveUrlSaved={(url) => setSavedDriveImageUrl(url)}
       />
 
       {/* Printable Output View for Browser Print */}

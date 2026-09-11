@@ -1,4 +1,5 @@
 import { Seat, SeatStatus, SeatCategory } from '../types';
+import { convertGoogleDriveUrl } from '../data/googleSheetConfig';
 
 export interface ParsedGoogleSheetRow {
   seatId: string;
@@ -24,6 +25,13 @@ export interface GoogleSheetSyncResult {
   unassigned?: ParsedGoogleSheetRow[];
   headers: string[];
   totalRows: number;
+  availableSheets?: string[];
+  activeSheetName?: string;
+  spreadsheetTitle?: string;
+  // Config parsed from Google Sheet (e.g. Plan Image Google Drive Link)
+  planDriveUrl?: string;
+  planImageUrl?: string;
+  configMetadata?: Record<string, string>;
 }
 
 /**
@@ -45,6 +53,13 @@ export function parseGoogleSheetUrl(url: string): { spreadsheetId: string | null
   const gid = gidMatch ? gidMatch[1] : '0';
 
   return { spreadsheetId, gid };
+}
+
+/**
+ * Convenience helper to extract just the spreadsheet ID
+ */
+export function extractSpreadsheetId(url: string): string | null {
+  return parseGoogleSheetUrl(url).spreadsheetId;
 }
 
 /**
@@ -174,6 +189,8 @@ export function mapSheetRowsToSeats(table: string[][]): GoogleSheetSyncResult {
 
   const parsedRows: ParsedGoogleSheetRow[] = [];
   const unassignedRows: ParsedGoogleSheetRow[] = [];
+  let detectedPlanDriveUrl = '';
+  const configMetadata: Record<string, string> = {};
 
   for (let r = 1; r < table.length; r++) {
     const row = table[r];
@@ -184,6 +201,39 @@ export function mapSheetRowsToSeats(table: string[][]): GoogleSheetSyncResult {
       rawSeatId = '';
     }
     let seatId = rawSeatId.toUpperCase();
+
+    // Check if this row is a CONFIG / METADATA row (e.g. #PLAN_IMAGE, CONFIG, IMAGE_URL)
+    const isSpecialConfigRow = 
+      rawSeatId.startsWith('#') || 
+      seatId.includes('PLAN_IMAGE') || 
+      seatId.includes('CONFIG') || 
+      seatId.includes('IMAGE_URL') ||
+      seatId.includes('DRIVE_IMAGE');
+
+    // Look for any Google Drive or image URL across the row's cells
+    let driveUrlInRow = '';
+    for (const cell of row) {
+      const cellVal = cell.trim();
+      if (
+        cellVal.includes('drive.google.com') || 
+        cellVal.includes('googleusercontent.com') ||
+        (isSpecialConfigRow && (cellVal.startsWith('http://') || cellVal.startsWith('https://')))
+      ) {
+        driveUrlInRow = cellVal;
+        break;
+      }
+    }
+
+    if (isSpecialConfigRow || driveUrlInRow) {
+      if (driveUrlInRow) {
+        detectedPlanDriveUrl = driveUrlInRow;
+      }
+      if (seatId) {
+        configMetadata[seatId] = driveUrlInRow || row[1] || '';
+      }
+      // Do not add config row to guest seat list
+      continue;
+    }
     const rowLetter = (rowCol !== -1 ? row[rowCol] : '').trim().toUpperCase();
     const numVal = numCol !== -1 ? parseInt(row[numCol], 10) : NaN;
 
@@ -292,22 +342,186 @@ export function mapSheetRowsToSeats(table: string[][]): GoogleSheetSyncResult {
     parsedRows.push(parsedRow);
   }
 
+  const planImageUrl = detectedPlanDriveUrl ? convertGoogleDriveUrl(detectedPlanDriveUrl) : undefined;
+
   return {
-    success: parsedRows.length > 0 || unassignedRows.length > 0,
+    success: parsedRows.length > 0 || unassignedRows.length > 0 || !!detectedPlanDriveUrl,
     message: parsedRows.length > 0 
-      ? `พบข้อมูลที่นั่ง ${parsedRows.length} ที่นั่ง${unassignedRows.length > 0 ? ` (และผู้มีเกียรติที่ยังไม่ระบุที่นั่ง ${unassignedRows.length} ท่าน)` : ''}`
-      : 'ไม่พบรหัสที่นั่ง (Seat ID) ที่ถูกต้องในตาราง กรุณาตรวจสอบหัวตาราง',
+      ? `พบข้อมูลที่นั่ง ${parsedRows.length} ที่นั่ง${unassignedRows.length > 0 ? ` (และผู้มีเกียรติที่ยังไม่ระบุที่นั่ง ${unassignedRows.length} ท่าน)` : ''}${detectedPlanDriveUrl ? ' • ตรวจพบคอนฟิกภาพผัง Google Drive' : ''}`
+      : (detectedPlanDriveUrl ? 'พบข้อมูลลิงก์ภาพผังพิธีการจาก Google Sheets' : 'ไม่พบรหัสที่นั่ง (Seat ID) ที่ถูกต้องในตาราง กรุณาตรวจสอบหัวตาราง'),
     rows: parsedRows,
     unassigned: unassignedRows,
     headers: rawHeaders,
     totalRows: parsedRows.length + unassignedRows.length,
+    planDriveUrl: detectedPlanDriveUrl || undefined,
+    planImageUrl: planImageUrl,
+    configMetadata: Object.keys(configMetadata).length > 0 ? configMetadata : undefined,
   };
 }
 
 /**
- * Fetches Google Sheet content via CSV endpoint or GViz API
+ * Fetches Google Sheet content via official Google Sheets REST API v4 using Bearer access token
  */
-export async function fetchGoogleSheetData(sheetUrl: string): Promise<GoogleSheetSyncResult> {
+export async function fetchGoogleSheetViaApi(
+  spreadsheetId: string,
+  accessToken: string,
+  targetGid?: string | null,
+  customSheetTitle?: string
+): Promise<GoogleSheetSyncResult> {
+  try {
+    // 1. Fetch spreadsheet metadata to get sheet names and properties
+    const metaRes = await fetch(
+      `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}?fields=properties.title,sheets.properties`,
+      {
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          Accept: 'application/json',
+        },
+      }
+    );
+
+    if (!metaRes.ok) {
+      if (metaRes.status === 401 || metaRes.status === 403) {
+        return {
+          success: false,
+          message: 'สิทธิ์การเข้าถึง Google Sheets ไม่เพียงพอ หรือเซสชันหมดอายุ กรุณาลงชื่อเข้าใช้ใหม่อีกครั้ง หรือตรวจสอบว่าบัญชีได้รับสิทธิ์เข้าถึงชีตนี้',
+          rows: [],
+          headers: [],
+          totalRows: 0,
+        };
+      }
+      if (metaRes.status === 404) {
+        return {
+          success: false,
+          message: 'ไม่พบไฟล์ Google Sheet ตาม ID ที่ระบุ กรุณาตรวจสอบลิงก์อีกครั้ง',
+          rows: [],
+          headers: [],
+          totalRows: 0,
+        };
+      }
+      return {
+        success: false,
+        message: `เรียก Google Sheets API ไม่สำเร็จ (HTTP ${metaRes.status})`,
+        rows: [],
+        headers: [],
+        totalRows: 0,
+      };
+    }
+
+    const metadata = await metaRes.json();
+    const spreadsheetTitle = metadata.properties?.title || 'Google Sheet';
+    const sheetsList: Array<{ title: string; sheetId: number }> = (metadata.sheets || []).map(
+      (s: any) => ({
+        title: s.properties?.title || 'Sheet1',
+        sheetId: s.properties?.sheetId ?? 0,
+      })
+    );
+
+    const availableSheets = sheetsList.map(s => s.title);
+
+    // 2. Determine target sheet tab title
+    let selectedTitle = customSheetTitle;
+    if (!selectedTitle && targetGid) {
+      const matchByGid = sheetsList.find(s => String(s.sheetId) === String(targetGid));
+      if (matchByGid) {
+        selectedTitle = matchByGid.title;
+      }
+    }
+    if (!selectedTitle && sheetsList.length > 0) {
+      selectedTitle = sheetsList[0].title;
+    }
+
+    if (!selectedTitle) {
+      return {
+        success: false,
+        message: 'ไม่พบแผ่นงาน (Sheet Tab) ในไฟล์ Google Sheet นี้',
+        rows: [],
+        headers: [],
+        totalRows: 0,
+        availableSheets,
+        spreadsheetTitle,
+      };
+    }
+
+    // 3. Fetch sheet cell values
+    const rangeParam = encodeURIComponent(selectedTitle);
+    const valuesRes = await fetch(
+      `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${rangeParam}?valueRenderOption=FORMATTED_VALUE`,
+      {
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          Accept: 'application/json',
+        },
+      }
+    );
+
+    if (!valuesRes.ok) {
+      return {
+        success: false,
+        message: `ไม่สามารถดึงข้อมูลแผ่นงาน "${selectedTitle}" ได้ (HTTP ${valuesRes.status})`,
+        rows: [],
+        headers: [],
+        totalRows: 0,
+        availableSheets,
+        activeSheetName: selectedTitle,
+        spreadsheetTitle,
+      };
+    }
+
+    const valuesData = await valuesRes.json();
+    const rawValues: any[][] = valuesData.values || [];
+
+    if (rawValues.length === 0) {
+      return {
+        success: false,
+        message: `แผ่นงาน "${selectedTitle}" ไม่มีข้อมูลเซลล์`,
+        rows: [],
+        headers: [],
+        totalRows: 0,
+        availableSheets,
+        activeSheetName: selectedTitle,
+        spreadsheetTitle,
+      };
+    }
+
+    // Normalize each cell to string
+    const maxCols = Math.max(...rawValues.map(r => r.length));
+    const table: string[][] = rawValues.map(r => {
+      const row: string[] = [];
+      for (let c = 0; c < maxCols; c++) {
+        row.push(String(r[c] ?? '').trim());
+      }
+      return row;
+    });
+
+    const parsedResult = mapSheetRowsToSeats(table);
+    return {
+      ...parsedResult,
+      availableSheets,
+      activeSheetName: selectedTitle,
+      spreadsheetTitle,
+    };
+  } catch (err) {
+    console.error('fetchGoogleSheetViaApi error:', err);
+    return {
+      success: false,
+      message: err instanceof Error ? err.message : 'เกิดข้อผิดพลาดในการเรียก Google Sheets API',
+      rows: [],
+      headers: [],
+      totalRows: 0,
+    };
+  }
+}
+
+/**
+ * Fetches Google Sheet content via official API if accessToken is provided,
+ * or falls back to direct CSV/GViz export endpoints for publicly shared sheets.
+ */
+export async function fetchGoogleSheetData(
+  sheetUrl: string,
+  accessToken?: string | null,
+  customSheetTitle?: string
+): Promise<GoogleSheetSyncResult> {
   const { spreadsheetId, gid } = parseGoogleSheetUrl(sheetUrl);
 
   if (!spreadsheetId) {
@@ -320,6 +534,20 @@ export async function fetchGoogleSheetData(sheetUrl: string): Promise<GoogleShee
     };
   }
 
+  // 1. If user has an active Google OAuth access token, use official Google Sheets API
+  if (accessToken) {
+    const apiResult = await fetchGoogleSheetViaApi(spreadsheetId, accessToken, gid, customSheetTitle);
+    if (apiResult.success) {
+      return apiResult;
+    }
+    // If API returned a specific error, return it
+    if (apiResult.message.includes('สิทธิ์การเข้าถึง') || apiResult.message.includes('ไม่พบไฟล์')) {
+      return apiResult;
+    }
+    // If it failed unexpectedly, try fallback endpoints
+  }
+
+  // 2. Fallback to CSV export / GViz endpoint (for public / shared link)
   const endpoints = buildGoogleSheetCsvUrls(spreadsheetId, gid || '0');
   let lastError = '';
 
@@ -343,7 +571,7 @@ export async function fetchGoogleSheetData(sheetUrl: string): Promise<GoogleShee
       if (text.includes('<!DOCTYPE html>') || text.includes('<html') || text.includes('accounts.google.com')) {
         return {
           success: false,
-          message: 'Google Sheet นี้ยังไม่ได้เปิดสิทธิ์ให้เข้าถึง กรุณาไปที่ Google Sheet > คลิกปุ่ม "แชร์ (Share)" > เปลี่ยนเป็น "ทุกคนที่มีลิงก์มีสิทธิ์ดู" หรือใช้แถบ "วางข้อมูลตาราง" แทนได้ทันที',
+          message: 'Google Sheet นี้เป็นไฟล์ส่วนตัว กรุณาคลิกปุ่ม "เข้าสู่ระบบด้วย Google" เพื่อซิงก์โดยตรง หรือตั้งค่าแชร์เป็น "ทุกคนที่มีลิงก์มีสิทธิ์ดู"',
           rows: [],
           headers: [],
           totalRows: 0,
@@ -364,7 +592,7 @@ export async function fetchGoogleSheetData(sheetUrl: string): Promise<GoogleShee
 
   return {
     success: false,
-    message: `ไม่สามารถดึงข้อมูลผ่านลิงก์ได้ (${lastError}) แนะนำให้ตรวจสอบการแชร์ หรือใช้แท็บ "วางข้อมูลจาก Google Sheet (Copy-Paste)" ได้อย่างง่ายดาย`,
+    message: `ไม่สามารถดึงข้อมูลผ่านลิงก์ได้ (${lastError}) แนะนำให้คลิก "เข้าสู่ระบบด้วย Google" ด้านบน หรือใช้แท็บ "วางข้อมูลจาก Google Sheet"`,
     rows: [],
     headers: [],
     totalRows: 0,
@@ -374,7 +602,7 @@ export async function fetchGoogleSheetData(sheetUrl: string): Promise<GoogleShee
 /**
  * Generates TSV text for copying to clipboard to paste into Google Sheet
  */
-export function generateSheetTemplateTsv(seats: Record<string, Seat>): string {
+export function generateSheetTemplateTsv(seats: Record<string, Seat>, currentDriveUrl?: string): string {
   const headers = ['รหัสที่นั่ง (Seat ID)', 'แถว (Row)', 'ลำดับที่ (Number)', 'ตำแหน่ง / คำนำหน้า', 'ชื่อ-นามสกุล แขกผู้มีเกียรติ', 'หน่วยงาน / สังกัด', 'กลุ่ม / Set', 'กระเช้าดอกไม้ (*)', 'สถานะ', 'หมายเหตุ'];
 
   const rows = Object.values(seats).map(s => [
@@ -390,13 +618,27 @@ export function generateSheetTemplateTsv(seats: Record<string, Seat>): string {
     s.notes || '',
   ]);
 
-  return [headers.join('\t'), ...rows.map(r => r.join('\t'))].join('\n');
+  // Append #PLAN_IMAGE config row so users can configure or sync the seating plan image
+  const configRow = [
+    '#PLAN_IMAGE',
+    'CONFIG',
+    '0',
+    'ลิงก์ภาพผังพิธีการ (Google Drive)',
+    currentDriveUrl || 'https://drive.google.com/file/d/วางรหัสไฟล์ที่นี่/view',
+    'ระบบผังที่นั่งวันศิลป์ พีระศรี',
+    'CONFIG',
+    'NO',
+    'confirmed',
+    'Seating Plan Background Image Link (Auto-synced)'
+  ];
+
+  return [headers.join('\t'), ...rows.map(r => r.join('\t')), configRow.join('\t')].join('\n');
 }
 
 /**
  * Downloads a pre-formatted CSV template for Google Sheets
  */
-export function downloadGoogleSheetTemplateCsv(seats: Record<string, Seat>): void {
+export function downloadGoogleSheetTemplateCsv(seats: Record<string, Seat>, currentDriveUrl?: string): void {
   const headers = ['Seat ID', 'Row', 'Number', 'Position / Title', 'Guest Name', 'Organization', 'Set Group', 'Flower Basket (*)', 'Status', 'Notes'];
 
   const rows = Object.values(seats).map(s => [
@@ -412,7 +654,21 @@ export function downloadGoogleSheetTemplateCsv(seats: Record<string, Seat>): voi
     `"${(s.notes || '').replace(/"/g, '""')}"`
   ]);
 
-  const csvContent = '\uFEFF' + [headers.join(','), ...rows.map(r => r.join(','))].join('\n');
+  // Append #PLAN_IMAGE config row
+  const configRow = [
+    '"#PLAN_IMAGE"',
+    '"CONFIG"',
+    0,
+    '"ลิงก์ภาพผังพิธีการ (Google Drive)"',
+    `"${(currentDriveUrl || 'https://drive.google.com/file/d/.../view').replace(/"/g, '""')}"`,
+    '"ระบบผังที่นั่งวันศิลป์ พีระศรี"',
+    '"CONFIG"',
+    'NO',
+    '"confirmed"',
+    '"Seating Plan Background Image Link (Auto-synced)"'
+  ];
+
+  const csvContent = '\uFEFF' + [headers.join(','), ...rows.map(r => r.join(',')), configRow.join(',')].join('\n');
   const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
   const url = URL.createObjectURL(blob);
   const link = document.createElement('a');
@@ -422,4 +678,125 @@ export function downloadGoogleSheetTemplateCsv(seats: Record<string, Seat>): voi
   link.click();
   link.remove();
   URL.revokeObjectURL(url);
+}
+
+/**
+ * Saves or updates the Google Drive Seating Plan image link into Google Sheets via API
+ */
+export async function saveDriveImageLinkToGoogleSheet(
+  spreadsheetId: string,
+  accessToken: string,
+  driveUrl: string,
+  sheetTabTitle: string = 'Sheet1'
+): Promise<{ success: boolean; message: string }> {
+  try {
+    const range = encodeURIComponent(sheetTabTitle);
+    const getRes = await fetch(
+      `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${range}?valueRenderOption=FORMATTED_VALUE`,
+      {
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          Accept: 'application/json',
+        },
+      }
+    );
+
+    if (!getRes.ok) {
+      return {
+        success: false,
+        message: `ไม่สามารถเข้าถึงแผ่นงานได้ (HTTP ${getRes.status}) กรุณาตรวจสอบสิทธิ์การแก้ไข`,
+      };
+    }
+
+    const data = await getRes.json();
+    const rows: string[][] = data.values || [];
+    let existingRowIndex = -1;
+
+    for (let i = 0; i < rows.length; i++) {
+      const firstCell = String(rows[i]?.[0] || '').trim().toUpperCase();
+      if (firstCell === '#PLAN_IMAGE' || firstCell === 'PLAN_IMAGE' || firstCell === '#CONFIG_IMAGE') {
+        existingRowIndex = i;
+        break;
+      }
+    }
+
+    const configRow = [
+      '#PLAN_IMAGE',
+      'CONFIG',
+      '0',
+      'ลิงก์ภาพผังพิธีการ (Google Drive)',
+      driveUrl.trim(),
+      'ระบบผังที่นั่งวันศิลป์ พีระศรี',
+      'CONFIG',
+      'NO',
+      'confirmed',
+      'Seating Plan Background Image Link (Auto-synced)'
+    ];
+
+    if (existingRowIndex >= 0) {
+      const rowNum = existingRowIndex + 1;
+      const updateRange = encodeURIComponent(`${sheetTabTitle}!A${rowNum}:J${rowNum}`);
+      const updateRes = await fetch(
+        `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${updateRange}?valueInputOption=USER_ENTERED`,
+        {
+          method: 'PUT',
+          headers: {
+            Authorization: `Bearer ${accessToken}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            range: `${sheetTabTitle}!A${rowNum}:J${rowNum}`,
+            majorDimension: 'ROWS',
+            values: [configRow],
+          }),
+        }
+      );
+
+      if (!updateRes.ok) {
+        return {
+          success: false,
+          message: `อัปเดตแถวใน Google Sheet ไม่สำเร็จ (HTTP ${updateRes.status})`,
+        };
+      }
+
+      return {
+        success: true,
+        message: 'อัปเดตแถว #PLAN_IMAGE ใน Google Sheet สำเร็จแล้ว ทุกคนที่เปิดเว็บจะได้รับภาพผังใหม่โดยอัตโนมัติ!',
+      };
+    } else {
+      const appendRange = encodeURIComponent(sheetTabTitle);
+      const appendRes = await fetch(
+        `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${appendRange}:append?valueInputOption=USER_ENTERED&insertDataOption=INSERT_ROWS`,
+        {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${accessToken}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            range: sheetTabTitle,
+            majorDimension: 'ROWS',
+            values: [configRow],
+          }),
+        }
+      );
+
+      if (!appendRes.ok) {
+        return {
+          success: false,
+          message: `เพิ่มแถวใน Google Sheet ไม่สำเร็จ (HTTP ${appendRes.status})`,
+        };
+      }
+
+      return {
+        success: true,
+        message: 'บันทึกแถว #PLAN_IMAGE พร้อมลิงก์ Google Drive ลงใน Google Sheet เรียบร้อยแล้ว!',
+      };
+    }
+  } catch (err) {
+    return {
+      success: false,
+      message: err instanceof Error ? err.message : 'เกิดข้อผิดพลาดในการบันทึกข้อมูลลง Google Sheet',
+    };
+  }
 }

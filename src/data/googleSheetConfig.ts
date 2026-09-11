@@ -1,0 +1,196 @@
+/**
+ * Central Configuration for Google Sheets Synchronization and Google Drive Seating Plan Image
+ */
+
+export const STORAGE_KEYS = {
+  SHEET_URL: 'google_sheet_sync_url',
+  DRIVE_IMAGE_URL: 'silpa_bhirasri_plan_drive_url',
+  BG_IMAGE_BASE64: 'silpa_bhirasri_plan_bg_image',
+  BG_OPACITY: 'silpa_bhirasri_plan_bg_opacity',
+  BG_PLACEMENT: 'silpa_bhirasri_plan_bg_placement',
+  AUTO_SYNC_ENABLED: 'silpa_bhirasri_auto_sync_enabled',
+  AUTO_SYNC_INTERVAL: 'silpa_bhirasri_auto_sync_interval_sec',
+  LAST_SYNC_TIME: 'google_sheet_last_sync_time',
+  LAST_SYNC_COUNT: 'google_sheet_last_sync_count',
+};
+
+// Default Google Sheet URL (can be customized or overridden in UI)
+export const DEFAULT_GOOGLE_SHEET_URL = '';
+
+/**
+ * Extracts Google Drive file ID from multiple URL formats:
+ * - https://drive.google.com/file/d/{id}/view...
+ * - https://drive.google.com/open?id={id}
+ * - https://drive.google.com/uc?id={id}
+ * - https://lh3.googleusercontent.com/d/{id}
+ */
+export function extractGoogleDriveFileId(url: string): string | null {
+  if (!url || typeof url !== 'string') return null;
+  const trimmed = url.trim();
+
+  // /file/d/{id}
+  const fileDMatch = trimmed.match(/\/file\/d\/([a-zA-Z0-9_-]+)/);
+  if (fileDMatch && fileDMatch[1]) return fileDMatch[1];
+
+  // /d/{id}
+  const dMatch = trimmed.match(/\/d\/([a-zA-Z0-9_-]+)/);
+  if (dMatch && dMatch[1]) return dMatch[1];
+
+  // ?id={id} or &id={id}
+  const idParamMatch = trimmed.match(/[?&]id=([a-zA-Z0-9_-]+)/);
+  if (idParamMatch && idParamMatch[1]) return idParamMatch[1];
+
+  return null;
+}
+
+/**
+ * Converts any Google Drive share link into a high-resolution direct image URL
+ */
+export function convertGoogleDriveUrl(url: string): string {
+  if (!url || typeof url !== 'string') return '';
+  const trimmed = url.trim();
+
+  // If already googleusercontent direct URL
+  if (trimmed.includes('googleusercontent.com/d/')) {
+    return trimmed;
+  }
+
+  const fileId = extractGoogleDriveFileId(trimmed);
+  if (fileId) {
+    // lh3.googleusercontent.com/d/{fileId} is the fastest and most reliable direct CDN link for public drive files
+    return `https://lh3.googleusercontent.com/d/${fileId}`;
+  }
+
+  return trimmed;
+}
+
+/**
+ * Retrieves the configured Google Sheet URL (from URL query param, localStorage, or environment)
+ */
+export function getConfiguredSheetUrl(): string {
+  try {
+    // 1. Check URL parameters (e.g. ?sheet=https://docs.google.com/spreadsheets/d/...)
+    if (typeof window !== 'undefined' && window.location) {
+      const searchParams = new URLSearchParams(window.location.search);
+      const paramSheet = searchParams.get('sheet') || searchParams.get('sheetUrl') || searchParams.get('sheets');
+      if (paramSheet && paramSheet.trim()) {
+        const decoded = decodeURIComponent(paramSheet.trim());
+        localStorage.setItem(STORAGE_KEYS.SHEET_URL, decoded);
+        return decoded;
+      }
+    }
+
+    // 2. Check localStorage
+    const saved = localStorage.getItem(STORAGE_KEYS.SHEET_URL) || localStorage.getItem('google_sheet_sync_url');
+    if (saved && saved.trim()) return saved.trim();
+
+    // 3. Check Vite environment variable if deployed
+    // @ts-ignore
+    const envUrl = import.meta.env?.VITE_GOOGLE_SHEET_URL;
+    if (envUrl && typeof envUrl === 'string' && envUrl.trim()) {
+      return envUrl.trim();
+    }
+  } catch {
+    // Ignore localStorage errors
+  }
+  return DEFAULT_GOOGLE_SHEET_URL;
+}
+
+/**
+ * Saves the configured Google Sheet URL to localStorage
+ */
+export function setConfiguredSheetUrl(url: string): void {
+  try {
+    const trimmed = url.trim();
+    if (trimmed) {
+      localStorage.setItem(STORAGE_KEYS.SHEET_URL, trimmed);
+    } else {
+      localStorage.removeItem(STORAGE_KEYS.SHEET_URL);
+    }
+  } catch {
+    // Ignore localStorage errors
+  }
+}
+
+/**
+ * Retrieves saved Google Drive Plan Image URL
+ */
+export function getSavedDriveImageUrl(): string {
+  try {
+    return localStorage.getItem(STORAGE_KEYS.DRIVE_IMAGE_URL) || 
+           localStorage.getItem('silpa_bhirasri_plan_bg_drive_url') || '';
+  } catch {
+    return '';
+  }
+}
+
+/**
+ * Saves Google Drive Plan Image URL to localStorage
+ */
+export function setSavedDriveImageUrl(url: string): void {
+  try {
+    const trimmed = url.trim();
+    if (trimmed) {
+      localStorage.setItem(STORAGE_KEYS.DRIVE_IMAGE_URL, trimmed);
+      localStorage.setItem('silpa_bhirasri_plan_bg_drive_url', trimmed);
+      const direct = convertGoogleDriveUrl(trimmed);
+      localStorage.setItem(STORAGE_KEYS.BG_IMAGE_BASE64, direct);
+      localStorage.setItem('silpa_bhirasri_plan_show_bg_image', 'true');
+    } else {
+      localStorage.removeItem(STORAGE_KEYS.DRIVE_IMAGE_URL);
+      localStorage.removeItem('silpa_bhirasri_plan_bg_drive_url');
+      localStorage.removeItem(STORAGE_KEYS.BG_IMAGE_BASE64);
+    }
+  } catch {
+    // Ignore localStorage errors
+  }
+}
+
+/**
+ * Checks if auto-sync on web load / interval is enabled (defaults to true)
+ */
+export function isAutoSyncEnabled(): boolean {
+  try {
+    const saved = localStorage.getItem(STORAGE_KEYS.AUTO_SYNC_ENABLED);
+    if (saved === null) return true; // Default enabled
+    return saved === 'true';
+  } catch {
+    return true;
+  }
+}
+
+/**
+ * Toggles auto-sync on web load
+ */
+export function setAutoSyncEnabled(enabled: boolean): void {
+  try {
+    localStorage.setItem(STORAGE_KEYS.AUTO_SYNC_ENABLED, enabled ? 'true' : 'false');
+  } catch {
+    // Ignore
+  }
+}
+
+/**
+ * Gets last sync timestamp
+ */
+export function getLastSyncTime(): string | null {
+  try {
+    return localStorage.getItem(STORAGE_KEYS.LAST_SYNC_TIME);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Saves last sync timestamp
+ */
+export function setLastSyncTime(timeStr: string, count?: number): void {
+  try {
+    localStorage.setItem(STORAGE_KEYS.LAST_SYNC_TIME, timeStr);
+    if (count !== undefined) {
+      localStorage.setItem(STORAGE_KEYS.LAST_SYNC_COUNT, count.toString());
+    }
+  } catch {
+    // Ignore
+  }
+}

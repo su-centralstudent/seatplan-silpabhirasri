@@ -5,7 +5,8 @@ import {
   X, PenTool, Image as ImageIcon,
   Sliders, Trash2, Eye, EyeOff, Upload,
   Plus, Minus, Settings, Check,
-  Link as LinkIcon, ExternalLink, RefreshCw
+  Link as LinkIcon, ExternalLink, RefreshCw,
+  FileSpreadsheet, RotateCw
 } from 'lucide-react';
 import { useDrawingCanvas } from '../hooks/useDrawingCanvas';
 import { SeatCard } from './SeatCard';
@@ -60,6 +61,8 @@ interface SeatingCanvasProps {
   isPrintMode?: boolean;
   routes?: CeremonyRoute[];
   onOpenRouteManager?: () => void;
+  onOpenGoogleSheets?: () => void;
+  onSaveDriveLinkToGoogleSheet?: (driveUrl: string) => Promise<{ success: boolean; message: string }>;
 }
 
 export const SeatingCanvas: React.FC<SeatingCanvasProps> = ({
@@ -75,6 +78,8 @@ export const SeatingCanvas: React.FC<SeatingCanvasProps> = ({
   isPrintMode = false,
   routes,
   onOpenRouteManager,
+  onOpenGoogleSheets,
+  onSaveDriveLinkToGoogleSheet,
 }) => {
   const [zoomLevel, setZoomLevel] = useState<number>(1);
   const [activeFlowRoute, setActiveFlowRoute] = useState<'all' | 'none'>('all');
@@ -181,6 +186,50 @@ export const SeatingCanvas: React.FC<SeatingCanvasProps> = ({
   // Hand-drawing tools
   const [isDrawingMode, setIsDrawingMode] = useState<boolean>(false);
   const drawingTools = useDrawingCanvas(isDrawingMode);
+
+  // Sync background image whenever metadata updates from Google Sheet
+  useEffect(() => {
+    if (metadata.bgImageUrl) {
+      setBgImage(metadata.bgImageUrl);
+      if (metadata.bgDriveUrl) {
+        setDriveUrlInput(metadata.bgDriveUrl);
+      }
+    }
+  }, [metadata.bgImageUrl, metadata.bgDriveUrl]);
+
+  // Save to Google Sheet state
+  const [isSavingToSheet, setIsSavingToSheet] = useState<boolean>(false);
+  const [saveSheetSuccessMsg, setSaveSheetSuccessMsg] = useState<string | null>(null);
+
+  const handleSaveToGoogleSheet = async () => {
+    if (!driveUrlInput.trim()) {
+      setDriveUrlError('กรุณาระบุลิงก์ Google Drive ก่อนบันทึกลง Google Sheet');
+      return;
+    }
+    // Also apply locally first
+    handleApplyDriveUrl();
+
+    if (!onSaveDriveLinkToGoogleSheet) {
+      if (onOpenGoogleSheets) onOpenGoogleSheets();
+      return;
+    }
+
+    setIsSavingToSheet(true);
+    setDriveUrlError(null);
+    setSaveSheetSuccessMsg(null);
+    try {
+      const result = await onSaveDriveLinkToGoogleSheet(driveUrlInput.trim());
+      if (result.success) {
+        setSaveSheetSuccessMsg(result.message);
+      } else {
+        setDriveUrlError(result.message);
+      }
+    } catch (err: any) {
+      setDriveUrlError(err?.message || 'บันทึกลง Google Sheet ไม่สำเร็จ');
+    } finally {
+      setIsSavingToSheet(false);
+    }
+  };
 
   // Handle Plan Image Upload (local file alternative)
   const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -648,7 +697,7 @@ export const SeatingCanvas: React.FC<SeatingCanvasProps> = ({
                         className="px-3.5 py-2 bg-blue-600 hover:bg-blue-700 text-white font-semibold text-xs rounded-xl shadow-2xs transition-colors flex items-center gap-1.5 cursor-pointer shrink-0"
                       >
                         <Check className="w-3.5 h-3.5" />
-                        <span>บันทึกและใช้งานลิงก์</span>
+                        <span>ใช้งานภาพทันที</span>
                       </button>
                     </div>
 
@@ -658,9 +707,48 @@ export const SeatingCanvas: React.FC<SeatingCanvasProps> = ({
                       </p>
                     )}
 
+                    {saveSheetSuccessMsg && (
+                      <p className="text-xs text-emerald-600 font-medium pl-1 flex items-center gap-1">
+                        <Check className="w-3.5 h-3.5" />
+                        {saveSheetSuccessMsg}
+                      </p>
+                    )}
+
                     <p className="text-[11px] text-slate-500 pl-1">
                       รองรับลิงก์ทุกรูปแบบของ Google Drive (ทั้ง /file/d/..., open?id=..., uc?id=...) หรือ Direct Image URL (png, jpg, webp)
                     </p>
+
+                    {/* Google Sheet Sync Box */}
+                    <div className="mt-2.5 p-3 bg-emerald-50/80 rounded-xl border border-emerald-200/80 flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
+                      <div className="space-y-0.5">
+                        <div className="flex items-center gap-1.5 font-bold text-emerald-900 text-xs">
+                          <FileSpreadsheet className="w-3.5 h-3.5 text-emerald-700" />
+                          <span>บันทึกลิงก์ภาพผังลง Google Sheet อัตโนมัติ</span>
+                        </div>
+                        <p className="text-[10.5px] text-emerald-800 leading-snug">
+                          เมื่อบันทึกแล้ว ทุกคนที่เปิดเว็บผ่าน GitHub หรือเบราว์เซอร์อื่นจะเห็นภาพผังตรงกันเสมอ
+                        </p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={handleSaveToGoogleSheet}
+                        disabled={isSavingToSheet}
+                        className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-60 text-white font-semibold text-xs rounded-lg shadow-2xs transition-colors flex items-center justify-center gap-1.5 shrink-0 cursor-pointer"
+                        title="บันทึกลิงก์ภาพนี้ลงแถว #PLAN_IMAGE ใน Google Sheet"
+                      >
+                        {isSavingToSheet ? (
+                          <>
+                            <RotateCw className="w-3.5 h-3.5 animate-spin" />
+                            <span>กำลังบันทึก...</span>
+                          </>
+                        ) : (
+                          <>
+                            <FileSpreadsheet className="w-3.5 h-3.5" />
+                            <span>บันทึกลง Google Sheet</span>
+                          </>
+                        )}
+                      </button>
+                    </div>
                   </form>
                 </div>
 

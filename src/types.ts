@@ -60,6 +60,12 @@ export interface SeatingPlanMetadata {
   lastUpdated: string;
   ceremonyTime: string;
   notes: string;
+  bgImageUrl?: string | null;
+  bgDriveUrl?: string;
+  bgOpacity?: number;
+  bgPlacement?: 'stage' | 'full';
+  googleSheetUrl?: string;
+  lastSyncedAt?: string;
 }
 
 export interface UnassignedGuest {
