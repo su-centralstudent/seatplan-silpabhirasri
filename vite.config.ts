@@ -64,10 +64,92 @@ function aistudioMediaPlugin(): Plugin {
 }
 // LINT.ThenChange(//depot/google3/java/com/google/alkali/boq/makersuite/applet_dev_service/templates/initializers/react_theme/vite.config.ts:aistudio_media_plugin)
 
+function planConfigApiPlugin(): Plugin {
+  return {
+    name: 'vite-plugin-plan-config-api',
+    configureServer(server) {
+      server.middlewares.use((req, res, next) => {
+        if (req.url && (req.url === '/api/config' || req.url.startsWith('/api/config?'))) {
+          const configPath = path.resolve(__dirname, 'public', 'plan_config.json');
+
+          if (req.method === 'GET') {
+            try {
+              if (fs.existsSync(configPath)) {
+                const content = fs.readFileSync(configPath, 'utf-8');
+                res.setHeader('Content-Type', 'application/json');
+                res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
+                res.end(content);
+                return;
+              }
+            } catch {
+              res.statusCode = 500;
+              res.end(JSON.stringify({ error: 'Failed to read config' }));
+              return;
+            }
+          }
+
+          if (req.method === 'POST') {
+            let body = '';
+            req.on('data', chunk => {
+              body += chunk;
+            });
+            req.on('end', () => {
+              try {
+                const incoming = JSON.parse(body || '{}');
+                let currentConfig: any = {};
+                if (fs.existsSync(configPath)) {
+                  try {
+                    currentConfig = JSON.parse(fs.readFileSync(configPath, 'utf-8'));
+                  } catch {}
+                }
+
+                const prevVersion = parseFloat(currentConfig.version || '1.0');
+                const nextVersion = isNaN(prevVersion) ? '1.1' : (prevVersion + 0.1).toFixed(1);
+
+                const updatedConfig = {
+                  ...currentConfig,
+                  ...incoming,
+                  version: incoming.version || nextVersion,
+                  lastUpdated: new Date().toISOString().split('T')[0],
+                };
+
+                // Ensure public directory exists
+                const publicDir = path.dirname(configPath);
+                if (!fs.existsSync(publicDir)) {
+                  fs.mkdirSync(publicDir, { recursive: true });
+                }
+                fs.writeFileSync(configPath, JSON.stringify(updatedConfig, null, 2), 'utf-8');
+
+                // Also update dist/plan_config.json if dist exists
+                const distConfigPath = path.resolve(__dirname, 'dist', 'plan_config.json');
+                if (fs.existsSync(path.dirname(distConfigPath))) {
+                  try {
+                    fs.writeFileSync(distConfigPath, JSON.stringify(updatedConfig, null, 2), 'utf-8');
+                  } catch {}
+                }
+
+                res.setHeader('Content-Type', 'application/json');
+                res.end(JSON.stringify({ success: true, config: updatedConfig }));
+                return;
+              } catch (err: any) {
+                res.statusCode = 400;
+                res.end(JSON.stringify({ success: false, error: err?.message || 'Invalid JSON format' }));
+                return;
+              }
+            });
+            return;
+          }
+        }
+        next();
+      });
+    },
+  };
+}
+
 export default defineConfig(() => {
   return {
     base: './',
-    plugins: [react(), tailwindcss(), aistudioMediaPlugin()],
+    plugins: [react(), tailwindcss(), aistudioMediaPlugin(), planConfigApiPlugin()],
     resolve: {
       alias: {
         '@': path.resolve(__dirname, '.'),
@@ -76,6 +158,9 @@ export default defineConfig(() => {
     server: {
       // HMR is disabled in AI Studio via DISABLE_HMR env var.
       // Do not modifyâfile watching is disabled to prevent flickering during agent edits.
+      host: '0.0.0.0',
+      port: 3000,
+      allowedHosts: true as true,
       hmr: process.env.DISABLE_HMR !== 'true',
       // Disable file watching when DISABLE_HMR is true to save CPU during agent edits.
       watch: process.env.DISABLE_HMR === 'true' ? null : {},

@@ -5,7 +5,8 @@ import {
   X, RefreshCw, Download, Copy, ExternalLink, 
   CheckCircle2, AlertCircle, FileSpreadsheet, Link2, 
   Clipboard, HelpCircle, Check, ArrowRight, LogOut,
-  Layers, Sparkles, ShieldCheck, Image as ImageIcon, RotateCw
+  Layers, Sparkles, ShieldCheck, Image as ImageIcon, RotateCw,
+  BookmarkCheck, Share2
 } from 'lucide-react';
 import { 
   fetchGoogleSheetData, 
@@ -23,6 +24,8 @@ import {
   logoutGoogle, 
   getAccessToken 
 } from '../utils/googleAuth';
+import { savePlanConfigToServer } from '../data/planConfig';
+import { getConfiguredSheetUrl, generateShareableUrl, DEFAULT_GOOGLE_SHEET_URL } from '../data/googleSheetConfig';
 
 interface GoogleSheetSyncModalProps {
   isOpen: boolean;
@@ -68,6 +71,8 @@ export const GoogleSheetSyncModal: React.FC<GoogleSheetSyncModalProps> = ({
   const [isCopiedTemplate, setIsCopiedTemplate] = useState<boolean>(false);
   const [showInstructions, setShowInstructions] = useState<boolean>(false);
   const [lastSyncTime, setLastSyncTime] = useState<string | null>(null);
+  const [isSavedAsDefault, setIsSavedAsDefault] = useState<boolean>(false);
+  const [isCopiedShareLink, setIsCopiedShareLink] = useState<boolean>(false);
 
   // Google OAuth User State
   const [currentUser, setCurrentUser] = useState<User | null>(null);
@@ -90,10 +95,10 @@ export const GoogleSheetSyncModal: React.FC<GoogleSheetSyncModalProps> = ({
     };
   }, []);
 
-  // Load saved URL and last sync time from localStorage on open
+  // Load saved URL and last sync time on open (supports global default, URL param, or localStorage)
   useEffect(() => {
     if (isOpen) {
-      const savedUrl = localStorage.getItem('google_sheet_sync_url') || '';
+      const savedUrl = localStorage.getItem('google_sheet_sync_url') || getConfiguredSheetUrl() || DEFAULT_GOOGLE_SHEET_URL;
       const savedTime = localStorage.getItem('google_sheet_last_sync_time');
       if (savedUrl) setSheetUrl(savedUrl);
       if (savedTime) setLastSyncTime(savedTime);
@@ -101,6 +106,32 @@ export const GoogleSheetSyncModal: React.FC<GoogleSheetSyncModalProps> = ({
       setSuccessMsg('');
     }
   }, [isOpen]);
+
+  // Save current sheet URL as default across all devices
+  const handleSaveAsDefault = async () => {
+    if (!sheetUrl.trim()) return;
+    try {
+      localStorage.setItem('google_sheet_sync_url', sheetUrl.trim());
+      localStorage.setItem('silpa_bhirasri_github_last_sheet', sheetUrl.trim());
+      await savePlanConfigToServer({ googleSheetUrl: sheetUrl.trim() });
+      setIsSavedAsDefault(true);
+      setTimeout(() => setIsSavedAsDefault(false), 3000);
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
+  // Copy shareable URL for opening on other devices/mobiles
+  const handleCopyShareLink = () => {
+    try {
+      const shareUrl = generateShareableUrl(sheetUrl.trim(), currentDriveUrl);
+      navigator.clipboard.writeText(shareUrl);
+      setIsCopiedShareLink(true);
+      setTimeout(() => setIsCopiedShareLink(false), 3000);
+    } catch (e) {
+      console.error(e);
+    }
+  };
 
   if (!isOpen) return null;
 
@@ -592,6 +623,55 @@ export const GoogleSheetSyncModal: React.FC<GoogleSheetSyncModalProps> = ({
                     <RefreshCw className={`w-4 h-4 ${isLoading ? 'animate-spin' : ''}`} />
                     <span>{isLoading ? 'กำลังดึงข้อมูล...' : 'ดึงข้อมูล (Fetch)'}</span>
                   </button>
+                </div>
+
+                {/* Default & Share Action Bar */}
+                <div className="flex flex-wrap items-center justify-between gap-2 pt-1 text-2xs">
+                  <div className="flex flex-wrap items-center gap-2">
+                    {sheetUrl.trim() === DEFAULT_GOOGLE_SHEET_URL ? (
+                      <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-emerald-50 text-emerald-800 border border-emerald-300 font-semibold shadow-2xs">
+                        <Sparkles className="w-3.5 h-3.5 text-emerald-600" />
+                        <span>⭐ ลิงก์เริ่มต้นหลักของระบบ (Default)</span>
+                      </span>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => setSheetUrl(DEFAULT_GOOGLE_SHEET_URL)}
+                        className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold border border-slate-300 transition-all cursor-pointer"
+                        title="คลิกเพื่อนำลิงก์ Google Sheet ค่าเริ่มต้นหลักของระบบมาใส่ในช่อง"
+                      >
+                        <RotateCw className="w-3.5 h-3.5 text-slate-600" />
+                        <span>ใช้ลิงก์เริ่มต้นหลัก (Default)</span>
+                      </button>
+                    )}
+
+                    {sheetUrl.trim() && (
+                      <button
+                        type="button"
+                        onClick={handleSaveAsDefault}
+                        className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-lg border font-semibold transition-all cursor-pointer ${
+                          isSavedAsDefault
+                            ? 'bg-emerald-100 text-emerald-800 border-emerald-300 shadow-2xs'
+                            : 'bg-blue-50 hover:bg-blue-100 text-blue-700 border-blue-200 shadow-2xs'
+                        }`}
+                        title="บันทึก Google Sheet นี้เป็นค่าเริ่มต้นประจำระบบ เพื่อให้อุปกรณ์เครื่องอื่นที่เปิดเว็บจะโหลดลิงก์นี้อัตโนมัติ"
+                      >
+                        <BookmarkCheck className={`w-3.5 h-3.5 ${isSavedAsDefault ? 'text-emerald-700' : 'text-blue-600'}`} />
+                        <span>{isSavedAsDefault ? 'บันทึกเป็นค่าเริ่มต้นของระบบแล้ว ✓' : 'ตั้งเป็นค่าเริ่มต้นประจำระบบ (สำหรับเปิดจากทุกอุปกรณ์)'}</span>
+                      </button>
+                    )}
+                  </div>
+                  {sheetUrl.trim() && (
+                    <button
+                      type="button"
+                      onClick={handleCopyShareLink}
+                      className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 font-medium border border-slate-200 transition-colors cursor-pointer"
+                      title="คัดลอกลิงก์เปิดเว็บพร้อมระบุ Google Sheet นี้สำหรับเปิดในมือถือหรือเครื่องอื่น"
+                    >
+                      <Share2 className="w-3.5 h-3.5 text-slate-500" />
+                      <span>{isCopiedShareLink ? 'คัดลอกลิงก์แชร์แล้ว ✓' : 'คัดลอกลิงก์แชร์เปิดเครื่องอื่น'}</span>
+                    </button>
+                  )}
                 </div>
               </div>
 

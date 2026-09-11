@@ -12,8 +12,11 @@ export function loadSeatingPlan(): SeatingPlanState {
         if (!parsed.unassignedGuests) {
           parsed.unassignedGuests = initialPlanState.unassignedGuests;
         }
-        if (!parsed.metadata.bgImageUrl) {
+        if (!parsed.metadata.bgImageUrl || parsed.metadata.bgImageUrl.includes('ceremony_flow_100.svg')) {
           parsed.metadata.bgImageUrl = initialPlanState.metadata.bgImageUrl;
+        }
+        if (!parsed.metadata.bgDriveUrl) {
+          parsed.metadata.bgDriveUrl = initialPlanState.metadata.bgDriveUrl;
         }
         return parsed;
       }
@@ -38,6 +41,9 @@ export function resetToDefaultPlan(): SeatingPlanState {
     localStorage.removeItem('silpa_bhirasri_plan_bg_image');
     localStorage.removeItem('silpa_bhirasri_plan_drive_url');
     localStorage.removeItem('silpa_bhirasri_plan_bg_drive_url');
+    localStorage.removeItem('silpa_bhirasri_plan_default_url');
+    localStorage.removeItem('silpa_bhirasri_plan_default_drive_url');
+    localStorage.removeItem('silpa_bhirasri_plan_default_image');
   } catch {
     // ignore
   }

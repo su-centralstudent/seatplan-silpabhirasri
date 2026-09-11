@@ -8,7 +8,7 @@ import { DEFAULT_CEREMONY_ROUTES, pointsToSvgPath } from '../data/defaultRoutes'
 import { RouteDrawingOverlay } from './RouteDrawingOverlay';
 import { ExactCeremonyCourtyard100 } from './ExactCeremonyCourtyard100';
 import { convertGoogleDriveUrl } from '../data/googleSheetConfig';
-import { getDefaultPlanImageUrl } from '../data/planConfig';
+import { getDefaultPlanImageUrl, getDefaultPlanDriveUrl } from '../data/planConfig';
 
 interface CeremonyFlowMapProps {
   metadata: SeatingPlanMetadata;
@@ -37,13 +37,13 @@ export const CeremonyFlowMap: React.FC<CeremonyFlowMapProps> = ({
   const [isDrawingMode, setIsDrawingMode] = useState<boolean>(false);
 
   const [bgImage, setBgImage] = useState<string | null>(() => {
-    if (metadata.bgImageUrl) return metadata.bgImageUrl;
-    const savedDrive = localStorage.getItem('silpa_bhirasri_plan_drive_url');
+    if (metadata.bgImageUrl && !metadata.bgImageUrl.includes('ceremony_flow_100.svg')) return metadata.bgImageUrl;
+    const savedDrive = localStorage.getItem('silpa_bhirasri_plan_drive_url') || localStorage.getItem('silpa_bhirasri_plan_bg_drive_url');
     if (savedDrive && savedDrive.trim()) {
       return convertGoogleDriveUrl(savedDrive.trim());
     }
     const saved = localStorage.getItem('silpa_bhirasri_plan_bg_image');
-    if (saved && saved.trim()) {
+    if (saved && saved.trim() && !saved.includes('ceremony_flow_100.svg')) {
       return saved;
     }
     return getDefaultPlanImageUrl();
@@ -56,7 +56,7 @@ export const CeremonyFlowMap: React.FC<CeremonyFlowMapProps> = ({
   });
   const [isDriveModalOpen, setIsDriveModalOpen] = useState<boolean>(false);
   const [driveInput, setDriveInput] = useState<string>(() => {
-    return metadata.bgDriveUrl || localStorage.getItem('silpa_bhirasri_plan_drive_url') || '';
+    return metadata.bgDriveUrl || localStorage.getItem('silpa_bhirasri_plan_drive_url') || getDefaultPlanDriveUrl();
   });
 
   const svgRef = useRef<SVGSVGElement | null>(null);

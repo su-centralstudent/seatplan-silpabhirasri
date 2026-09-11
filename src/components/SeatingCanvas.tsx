@@ -116,28 +116,28 @@ export const SeatingCanvas: React.FC<SeatingCanvasProps> = ({
   // Background Image management (Allows embedding Google Drive image link & local upload)
   type BgPlacementMode = 'stage' | 'full';
 
-  // Drive URL input & background image state (Default: configured system/GitHub plan image)
+  // Drive URL input & background image state (Default: configured system/Google Drive plan image)
   const [driveUrlInput, setDriveUrlInput] = useState<string>(() => {
-    return metadata.bgDriveUrl || localStorage.getItem('silpa_bhirasri_plan_drive_url') || '';
+    return metadata.bgDriveUrl || localStorage.getItem('silpa_bhirasri_plan_drive_url') || getDefaultPlanDriveUrl();
   });
   const [driveUrlError, setDriveUrlError] = useState<string | null>(null);
 
   const [bgImage, setBgImage] = useState<string | null>(() => {
     // 1. Check metadata from props first
-    if (metadata.bgImageUrl) {
+    if (metadata.bgImageUrl && !metadata.bgImageUrl.includes('ceremony_flow_100.svg')) {
       return metadata.bgImageUrl;
     }
     // 2. Check saved Google Drive URL
-    const savedDrive = localStorage.getItem('silpa_bhirasri_plan_drive_url');
+    const savedDrive = localStorage.getItem('silpa_bhirasri_plan_drive_url') || localStorage.getItem('silpa_bhirasri_plan_bg_drive_url');
     if (savedDrive && savedDrive.trim()) {
       return convertGoogleDriveUrl(savedDrive.trim());
     }
     // 3. Check saved custom image
     const saved = localStorage.getItem('silpa_bhirasri_plan_bg_image');
-    if (saved && saved.trim()) {
+    if (saved && saved.trim() && !saved.includes('ceremony_flow_100.svg')) {
       return saved;
     }
-    // 4. Default: Return system default plan image (ceremony_flow_100.svg / GitHub plan_config)
+    // 4. Default: Return system default plan image (Google Drive image / GitHub plan_config)
     return getDefaultPlanImageUrl();
   });
 

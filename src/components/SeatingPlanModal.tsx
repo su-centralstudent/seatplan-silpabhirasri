@@ -1,9 +1,9 @@
 import React, { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { X, LayoutGrid, Check, BookmarkCheck } from 'lucide-react';
+import { X, LayoutGrid, Check, BookmarkCheck, Share2 } from 'lucide-react';
 import { SeatingPlanMetadata } from '../types';
-import { convertGoogleDriveUrl } from '../data/googleSheetConfig';
-import { setDefaultPlanUrl, getDefaultPlanDriveUrl } from '../data/planConfig';
+import { convertGoogleDriveUrl, generateShareableUrl } from '../data/googleSheetConfig';
+import { setDefaultPlanUrl, getDefaultPlanDriveUrl, savePlanConfigToServer } from '../data/planConfig';
 
 interface SeatingPlanModalProps {
   isOpen: boolean;
@@ -43,8 +43,9 @@ export const SeatingPlanModal: React.FC<SeatingPlanModalProps> = ({
   const [localEventTitle, setLocalEventTitle] = useState<string>(() => metadata.eventTitle || 'แผนผังที่นั่งสำหรับแขกผู้มีเกียรติงานวันศิลป์ พีระศรี ในพิธีการ');
   const [localZone, setLocalZone] = useState<string>(selectedZone || 'none');
   const [localPlacement, setLocalPlacement] = useState<'stage' | 'full'>(bgPlacement || 'stage');
-  const [localDriveUrl, setLocalDriveUrl] = useState<string>(driveUrl || '');
+  const [localDriveUrl, setLocalDriveUrl] = useState<string>(driveUrl || metadata.bgDriveUrl || getDefaultPlanDriveUrl());
   const [isDefaultSaved, setIsDefaultSaved] = useState<boolean>(false);
+  const [isCopiedShareLink, setIsCopiedShareLink] = useState<boolean>(false);
 
   // Keep local state in sync when opened or props update
   useEffect(() => {
@@ -53,9 +54,9 @@ export const SeatingPlanModal: React.FC<SeatingPlanModalProps> = ({
       setLocalEventTitle(metadata.eventTitle || 'แผนผังที่นั่งสำหรับแขกผู้มีเกียรติงานวันศิลป์ พีระศรี ในพิธีการ');
       setLocalZone(selectedZone || 'none');
       setLocalPlacement(bgPlacement || 'stage');
-      setLocalDriveUrl(driveUrl || '');
+      setLocalDriveUrl(driveUrl || metadata.bgDriveUrl || getDefaultPlanDriveUrl());
     }
-  }, [isOpen, metadata.year, metadata.eventTitle, selectedZone, bgPlacement, driveUrl]);
+  }, [isOpen, metadata.year, metadata.eventTitle, metadata.bgDriveUrl, selectedZone, bgPlacement, driveUrl]);
 
   // Real-time update year as user types so canvas reflects immediately
   const handleYearChange = (val: string) => {
@@ -361,16 +362,38 @@ export const SeatingPlanModal: React.FC<SeatingPlanModalProps> = ({
                         {localDriveUrl.trim() && (
                           <button
                             type="button"
-                            onClick={() => {
-                              setDefaultPlanUrl(localDriveUrl.trim());
+                            onClick={async () => {
+                              const trimmed = localDriveUrl.trim();
+                              setDefaultPlanUrl(trimmed);
+                              await savePlanConfigToServer({ planDriveUrl: trimmed });
                               setIsDefaultSaved(true);
-                              setTimeout(() => setIsDefaultSaved(false), 2500);
+                              setTimeout(() => setIsDefaultSaved(false), 3000);
                             }}
-                            className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-blue-50 hover:bg-blue-100 text-blue-700 font-semibold border border-blue-200 transition-colors cursor-pointer"
-                            title="บันทึกลิงก์ภาพนี้เป็นค่าเริ่มต้นถาวรของระบบ"
+                            className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md bg-blue-50 hover:bg-blue-100 text-blue-700 font-semibold border border-blue-200 transition-colors cursor-pointer"
+                            title="บันทึกลิงก์ภาพนี้เป็นค่าเริ่มต้นถาวรของระบบ สำหรับเปิดจากทุกอุปกรณ์"
                           >
                             <BookmarkCheck className="w-3 h-3 text-blue-600" />
-                            <span>{isDefaultSaved ? 'บันทึกเป็นค่า Default แล้ว ✓' : 'ตั้งเป็นค่าเริ่มต้น (Default)'}</span>
+                            <span>{isDefaultSaved ? 'บันทึกเป็นค่า Default ทุกเครื่องแล้ว ✓' : 'ตั้งเป็นค่าเริ่มต้น (Default ทุกอุปกรณ์)'}</span>
+                          </button>
+                        )}
+                        {localDriveUrl.trim() && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              try {
+                                const shareUrl = generateShareableUrl(undefined, localDriveUrl.trim());
+                                navigator.clipboard.writeText(shareUrl);
+                                setIsCopiedShareLink(true);
+                                setTimeout(() => setIsCopiedShareLink(false), 3000);
+                              } catch (e) {
+                                console.error(e);
+                              }
+                            }}
+                            className="inline-flex items-center gap-1 px-2 py-1 rounded-md bg-slate-100 hover:bg-slate-200 text-slate-700 font-medium border border-slate-200 transition-colors cursor-pointer"
+                            title="คัดลอกลิงก์แชร์สำหรับเปิดบนอุปกรณ์อื่น"
+                          >
+                            <Share2 className="w-3 h-3 text-slate-500" />
+                            <span>{isCopiedShareLink ? 'คัดลอกแล้ว ✓' : 'แชร์ลิงก์เปิดเครื่องอื่น'}</span>
                           </button>
                         )}
                       </div>

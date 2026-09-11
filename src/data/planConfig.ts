@@ -36,10 +36,10 @@ export function resolveAssetUrl(url: string): string {
 }
 
 export const DEFAULT_PLAN_CONFIG: PlanSyncConfig = {
-  version: '1.0',
-  planImageUrl: '/assets/ceremony_flow_100.svg',
-  planDriveUrl: '',
-  googleSheetUrl: '',
+  version: '1.4',
+  planImageUrl: 'https://lh3.googleusercontent.com/d/1meSAmfFo0p5ScU6RHQWDYfS6ryylAZ80',
+  planDriveUrl: 'https://drive.google.com/file/d/1meSAmfFo0p5ScU6RHQWDYfS6ryylAZ80/view?usp=drive_link',
+  googleSheetUrl: 'https://docs.google.com/spreadsheets/d/198GFNXlcZs4eC61c73eMp3xQj5D8HDXdzTiEBZfb288/edit?usp=sharing',
   opacity: 0.95,
   description: 'Official ceremony flow diagram for Silpa Bhirasri Day',
   lastUpdated: '2026-09-11',
@@ -47,6 +47,7 @@ export const DEFAULT_PLAN_CONFIG: PlanSyncConfig = {
 
 export const GITHUB_CONFIG_APPLIED_VERSION_KEY = 'silpa_bhirasri_github_config_version';
 export const GITHUB_CONFIG_LAST_IMAGE_KEY = 'silpa_bhirasri_github_last_image';
+export const GITHUB_CONFIG_LAST_SHEET_KEY = 'silpa_bhirasri_github_last_sheet';
 export const DEFAULT_PLAN_STORAGE_KEY = 'silpa_bhirasri_plan_default_url';
 export const DEFAULT_PLAN_IMAGE_KEY = 'silpa_bhirasri_plan_default_image';
 
@@ -73,10 +74,24 @@ export function setDefaultPlanUrl(url: string): void {
 }
 
 /**
- * Gets the configured default Google Drive / direct link
+ * Gets the configured default Google Drive / direct link (checks URL params, localStorage, or fallback)
  */
 export function getDefaultPlanDriveUrl(): string {
   if (typeof window !== 'undefined') {
+    // 1. Check URL parameters (e.g. ?plan=... or ?drive=...)
+    try {
+      if (window.location && window.location.search) {
+        const searchParams = new URLSearchParams(window.location.search);
+        const paramPlan = searchParams.get('plan') || searchParams.get('drive') || searchParams.get('image');
+        if (paramPlan && paramPlan.trim()) {
+          const decoded = decodeURIComponent(paramPlan.trim());
+          setDefaultPlanUrl(decoded);
+          return decoded;
+        }
+      }
+    } catch {}
+
+    // 2. Check localStorage
     const savedDefaultDrive = localStorage.getItem(DEFAULT_PLAN_STORAGE_KEY) ||
       localStorage.getItem('silpa_bhirasri_plan_default_drive_url') ||
       localStorage.getItem('silpa_bhirasri_plan_drive_url') ||
@@ -116,8 +131,8 @@ export function getDefaultPlanImageUrl(): string {
 }
 
 /**
- * Fetches the latest plan configuration from the repository (public/plan_config.json)
- * with cache-busting timestamp so that changes committed to GitHub are detected immediately.
+ * Fetches the latest plan configuration from the repository / server (public/plan_config.json)
+ * with cache-busting timestamp so that updates are detected immediately across devices.
  */
 export async function fetchGitHubPlanConfig(): Promise<PlanSyncConfig | null> {
   try {
@@ -135,7 +150,7 @@ export async function fetchGitHubPlanConfig(): Promise<PlanSyncConfig | null> {
     }
 
     const data = await res.json();
-    if (data && (data.planImageUrl || data.planDriveUrl)) {
+    if (data && (data.planImageUrl || data.planDriveUrl || data.googleSheetUrl)) {
       return {
         version: String(data.version || '1.0'),
         planImageUrl: data.planImageUrl || '',
@@ -147,10 +162,48 @@ export async function fetchGitHubPlanConfig(): Promise<PlanSyncConfig | null> {
       };
     }
   } catch (err) {
-    // Network or static fetch error (e.g. offline) - silently fallback
-    console.warn('Could not fetch GitHub plan_config.json:', err);
+    // Silently fallback if offline
+    console.warn('Could not fetch plan_config.json:', err);
   }
   return null;
+}
+
+/**
+ * Saves plan configuration to server API (/api/config) to make it the default for all devices
+ */
+export async function savePlanConfigToServer(
+  incomingConfig: Partial<PlanSyncConfig>
+): Promise<{ success: boolean; config?: PlanSyncConfig; error?: string }> {
+  // Update local storage immediately
+  if (incomingConfig.planDriveUrl) {
+    setDefaultPlanUrl(incomingConfig.planDriveUrl);
+  }
+  if (incomingConfig.googleSheetUrl) {
+    try {
+      localStorage.setItem('google_sheet_sync_url', incomingConfig.googleSheetUrl);
+    } catch {}
+  }
+
+  try {
+    const res = await fetch('/api/config', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(incomingConfig),
+    });
+
+    if (res.ok) {
+      const data = await res.json();
+      if (data && data.success) {
+        return { success: true, config: data.config };
+      }
+    }
+  } catch (err: any) {
+    console.warn('Server config endpoint not available, saved locally:', err);
+  }
+
+  return { success: true };
 }
 
 /**
@@ -176,6 +229,7 @@ export function hasGitHubConfigChanged(newConfig: PlanSyncConfig): boolean {
   try {
     const lastVersion = localStorage.getItem(GITHUB_CONFIG_APPLIED_VERSION_KEY);
     const lastImage = localStorage.getItem(GITHUB_CONFIG_LAST_IMAGE_KEY);
+    const lastSheet = localStorage.getItem(GITHUB_CONFIG_LAST_SHEET_KEY);
 
     // If version changed on GitHub, it's an update
     if (lastVersion && lastVersion !== newConfig.version) {
@@ -191,8 +245,13 @@ export function hasGitHubConfigChanged(newConfig: PlanSyncConfig): boolean {
       return true;
     }
 
+    // If the Google Sheet URL specified changed
+    if (newConfig.googleSheetUrl && lastSheet !== newConfig.googleSheetUrl) {
+      return true;
+    }
+
     // If never applied before, apply now
-    if (!lastVersion && !lastImage) {
+    if (!lastVersion && !lastImage && !lastSheet) {
       return true;
     }
   } catch {
@@ -211,6 +270,10 @@ export function markGitHubConfigApplied(config: PlanSyncConfig): void {
       ? convertGoogleDriveUrl(config.planDriveUrl)
       : resolveAssetUrl(config.planImageUrl);
     localStorage.setItem(GITHUB_CONFIG_LAST_IMAGE_KEY, targetImage);
+    if (config.googleSheetUrl) {
+      localStorage.setItem(GITHUB_CONFIG_LAST_SHEET_KEY, config.googleSheetUrl);
+      localStorage.setItem('google_sheet_sync_url', config.googleSheetUrl);
+    }
   } catch {
     // ignore
   }

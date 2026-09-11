@@ -37,7 +37,8 @@ import {
   hasGitHubConfigChanged, 
   markGitHubConfigApplied, 
   resolveAssetUrl, 
-  getDefaultPlanImageUrl 
+  getDefaultPlanImageUrl,
+  getDefaultPlanDriveUrl 
 } from './data/planConfig';
 
 export default function App() {
@@ -141,45 +142,13 @@ export default function App() {
 
   // Auto-sync on web load & tab focus (supports GitHub Pages & all browsers)
   useEffect(() => {
-    // 1. Sync plan image / config from GitHub repository (plan_config.json)
-    const syncGitHubPlanConfig = async () => {
-      try {
-        const ghConfig = await fetchGitHubPlanConfig();
-        if (!ghConfig) return;
-
-        if (hasGitHubConfigChanged(ghConfig)) {
-          const directUrl = ghConfig.planDriveUrl
-            ? convertGoogleDriveUrl(ghConfig.planDriveUrl)
-            : resolveAssetUrl(ghConfig.planImageUrl);
-
-          if (directUrl) {
-            markGitHubConfigApplied(ghConfig);
-            setPlanState(prev => ({
-              ...prev,
-              metadata: {
-                ...prev.metadata,
-                bgImageUrl: directUrl,
-                ...(ghConfig.planDriveUrl ? { bgDriveUrl: ghConfig.planDriveUrl } : {}),
-              },
-            }));
-            localStorage.setItem('silpa_bhirasri_plan_bg_image', directUrl);
-            if (ghConfig.planDriveUrl) {
-              localStorage.setItem('silpa_bhirasri_plan_drive_url', ghConfig.planDriveUrl);
-            }
-          }
-        }
-      } catch (err) {
-        console.warn('Silent GitHub plan config check:', err);
-      }
-    };
-
     // 2. Auto-sync seat data and plan image from Google Sheet
-    const autoSyncFromSheet = async () => {
-      const sheetUrl = getConfiguredSheetUrl();
+    const autoSyncFromSheet = async (targetUrl?: string) => {
+      const sheetUrl = targetUrl || getConfiguredSheetUrl();
       if (!sheetUrl) return;
 
       const isEnabled = isAutoSyncEnabled();
-      if (!isEnabled) return;
+      if (!isEnabled && !targetUrl) return;
 
       try {
         const token = getAccessToken();
@@ -227,16 +196,18 @@ export default function App() {
               notes: u.notes,
             }));
 
+            // Auto-update Plan Image if Google Sheet specified one via #PLAN_IMAGE
             let nextMetadata = prev.metadata;
-            if (result.planImageUrl || result.planDriveUrl) {
-              if (result.planDriveUrl) {
-                setSavedDriveImageUrl(result.planDriveUrl);
-              }
+            if (result.planImageUrl) {
               nextMetadata = {
                 ...prev.metadata,
-                ...(result.planImageUrl ? { bgImageUrl: result.planImageUrl } : {}),
+                bgImageUrl: result.planImageUrl,
                 ...(result.planDriveUrl ? { bgDriveUrl: result.planDriveUrl } : {}),
               };
+              localStorage.setItem('silpa_bhirasri_plan_bg_image', result.planImageUrl);
+              if (result.planDriveUrl) {
+                localStorage.setItem('silpa_bhirasri_plan_drive_url', result.planDriveUrl);
+              }
             }
 
             if (!hasChanges && unassignedList.length === 0 && !result.planImageUrl) {
@@ -256,6 +227,55 @@ export default function App() {
         }
       } catch (err) {
         console.warn('Silent auto-sync info:', err);
+      }
+    };
+
+    // 1. Sync plan image / config from GitHub repository / server (plan_config.json)
+    const syncGitHubPlanConfig = async () => {
+      try {
+        const ghConfig = await fetchGitHubPlanConfig();
+        if (!ghConfig) return;
+
+        const configChanged = hasGitHubConfigChanged(ghConfig);
+        const hasSavedDrive = typeof window !== 'undefined' && localStorage.getItem('silpa_bhirasri_plan_drive_url');
+
+        // Sync Plan Image & Drive URL
+        if (configChanged || (ghConfig.planDriveUrl && !hasSavedDrive)) {
+          const directUrl = ghConfig.planDriveUrl
+            ? convertGoogleDriveUrl(ghConfig.planDriveUrl)
+            : resolveAssetUrl(ghConfig.planImageUrl);
+
+          if (directUrl) {
+            setPlanState(prev => ({
+              ...prev,
+              metadata: {
+                ...prev.metadata,
+                bgImageUrl: directUrl,
+                ...(ghConfig.planDriveUrl ? { bgDriveUrl: ghConfig.planDriveUrl } : {}),
+              },
+            }));
+            localStorage.setItem('silpa_bhirasri_plan_bg_image', directUrl);
+            if (ghConfig.planDriveUrl) {
+              localStorage.setItem('silpa_bhirasri_plan_drive_url', ghConfig.planDriveUrl);
+              localStorage.setItem('silpa_bhirasri_plan_default_url', ghConfig.planDriveUrl);
+            }
+          }
+        }
+
+        // Sync Google Sheet URL across all devices
+        if (ghConfig.googleSheetUrl && ghConfig.googleSheetUrl.trim()) {
+          const trimmedSheet = ghConfig.googleSheetUrl.trim();
+          const currentLocalSheet = localStorage.getItem('google_sheet_sync_url') || localStorage.getItem('silpa_bhirasri_github_last_sheet');
+          if (!currentLocalSheet || configChanged) {
+            localStorage.setItem('google_sheet_sync_url', trimmedSheet);
+            localStorage.setItem('silpa_bhirasri_github_last_sheet', trimmedSheet);
+            autoSyncFromSheet(trimmedSheet);
+          }
+        }
+
+        markGitHubConfigApplied(ghConfig);
+      } catch (err) {
+        console.warn('Silent GitHub plan config check:', err);
       }
     };
 
@@ -659,12 +679,13 @@ export default function App() {
                 }}
                 onResetToDefaultPlanImage={() => {
                   const defaultUrl = getDefaultPlanImageUrl();
+                  const defaultDrive = getDefaultPlanDriveUrl();
                   setPlanState(prev => ({
                     ...prev,
                     metadata: {
                       ...prev.metadata,
                       bgImageUrl: defaultUrl,
-                      bgDriveUrl: undefined,
+                      bgDriveUrl: defaultDrive,
                     },
                   }));
                 }}

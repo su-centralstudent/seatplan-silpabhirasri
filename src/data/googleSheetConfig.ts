@@ -14,8 +14,9 @@ export const STORAGE_KEYS = {
   LAST_SYNC_COUNT: 'google_sheet_last_sync_count',
 };
 
-// Default Google Sheet URL (can be customized or overridden in UI)
-export const DEFAULT_GOOGLE_SHEET_URL = '';
+// Default Google Sheet URL & Google Drive Plan Image URL
+export const DEFAULT_GOOGLE_SHEET_URL = 'https://docs.google.com/spreadsheets/d/198GFNXlcZs4eC61c73eMp3xQj5D8HDXdzTiEBZfb288/edit?usp=sharing';
+export const DEFAULT_DRIVE_PLAN_URL = 'https://drive.google.com/file/d/1meSAmfFo0p5ScU6RHQWDYfS6ryylAZ80/view?usp=drive_link';
 
 /**
  * Extracts Google Drive file ID from multiple URL formats:
@@ -81,7 +82,9 @@ export function getConfiguredSheetUrl(): string {
     }
 
     // 2. Check localStorage
-    const saved = localStorage.getItem(STORAGE_KEYS.SHEET_URL) || localStorage.getItem('google_sheet_sync_url');
+    const saved = localStorage.getItem(STORAGE_KEYS.SHEET_URL) || 
+                  localStorage.getItem('google_sheet_sync_url') ||
+                  localStorage.getItem('silpa_bhirasri_github_last_sheet');
     if (saved && saved.trim()) return saved.trim();
 
     // 3. Check Vite environment variable if deployed
@@ -94,6 +97,31 @@ export function getConfiguredSheetUrl(): string {
     // Ignore localStorage errors
   }
   return DEFAULT_GOOGLE_SHEET_URL;
+}
+
+/**
+ * Generates a shareable URL containing both the active sheet URL and plan drive URL
+ * so opening on another device (or mobile) will automatically load and sync all data.
+ */
+export function generateShareableUrl(customSheet?: string, customPlanDrive?: string): string {
+  if (typeof window === 'undefined') return '';
+  try {
+    const sheet = customSheet !== undefined ? customSheet : getConfiguredSheetUrl();
+    const plan = customPlanDrive !== undefined 
+      ? customPlanDrive 
+      : (localStorage.getItem('silpa_bhirasri_plan_drive_url') || localStorage.getItem('silpa_bhirasri_plan_default_url') || '');
+    
+    const url = new URL(window.location.origin + window.location.pathname);
+    if (sheet && sheet.trim()) {
+      url.searchParams.set('sheet', sheet.trim());
+    }
+    if (plan && plan.trim()) {
+      url.searchParams.set('plan', plan.trim());
+    }
+    return url.toString();
+  } catch {
+    return window.location.href;
+  }
 }
 
 /**
@@ -117,11 +145,13 @@ export function setConfiguredSheetUrl(url: string): void {
  */
 export function getSavedDriveImageUrl(): string {
   try {
-    return localStorage.getItem(STORAGE_KEYS.DRIVE_IMAGE_URL) || 
-           localStorage.getItem('silpa_bhirasri_plan_bg_drive_url') || '';
+    const saved = localStorage.getItem(STORAGE_KEYS.DRIVE_IMAGE_URL) || 
+           localStorage.getItem('silpa_bhirasri_plan_bg_drive_url');
+    if (saved && saved.trim()) return saved.trim();
   } catch {
-    return '';
+    // Ignore localStorage errors
   }
+  return DEFAULT_DRIVE_PLAN_URL;
 }
 
 /**
