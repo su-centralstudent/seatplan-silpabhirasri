@@ -466,10 +466,10 @@ export const SeatingCanvas: React.FC<SeatingCanvasProps> = ({
   const rowD = getRowSeats('D', true);
   const rowE = getRowSeats('E', true);
 
-  // Yellow Zone: F, G, H (เรียงลำดับเดิม หมายเลขสูงสุด (ซ้าย) ➔ หมายเลข 1 (ขวา))
-  const rowF = getRowSeats('F', true);
-  const rowG = getRowSeats('G', true);
-  const rowH = getRowSeats('H', true);
+  // Yellow Zone: F, G, H (เรียงลำดับจากซ้ายไปขวา หมายเลข 1 อยู่ซ้ายสุด)
+  const rowF = getRowSeats('F', false);
+  const rowG = getRowSeats('G', false);
+  const rowH = getRowSeats('H', false);
 
   // Right Green: I (standardized 8 seats)
   const colI = getRowSeats('I', false);
@@ -1507,7 +1507,7 @@ export const SeatingCanvas: React.FC<SeatingCanvasProps> = ({
                   โซนสีเหลือง (แถว F, G, H) — รวม {rowF.length + rowG.length + rowH.length} ที่นั่ง
                 </span>
                 <span className="text-[11px] text-slate-500">
-                  ทิศทางเวที: หมายเลขสูงสุด (ซ้าย) ➔ หมายเลข 1 (ขวา)
+                  ทิศทางเวที: หมายเลข 1 (ซ้าย) ➔ หมายเลขสูงสุด (ขวา)
                 </span>
               </div>
 

@@ -167,9 +167,9 @@ export const ZonePinkSvg: React.FC<ZoneSubPlanProps> = ({ metadata, seats }) => 
  * รวม 18 ที่นั่ง (แถวละ 6 ที่นั่ง) — ผู้บริหารหน่วยงาน / แขกผู้มีเกียรติ / ผู้แทนองค์กร
  */
 export const ZoneYellowSvg: React.FC<ZoneSubPlanProps> = ({ metadata, seats }) => {
-  const rowF = getDynamicRowSeats(seats, 'F', true, 6, 'general');
-  const rowG = getDynamicRowSeats(seats, 'G', true, 6, 'general');
-  const rowH = getDynamicRowSeats(seats, 'H', true, 6, 'general');
+  const rowF = getDynamicRowSeats(seats, 'F', false, 6, 'general');
+  const rowG = getDynamicRowSeats(seats, 'G', false, 6, 'general');
+  const rowH = getDynamicRowSeats(seats, 'H', false, 6, 'general');
 
   const totalSeats = rowF.length + rowG.length + rowH.length;
 
@@ -217,7 +217,7 @@ export const ZoneYellowSvg: React.FC<ZoneSubPlanProps> = ({ metadata, seats }) =
       {/* Stage Direction Bar */}
       <rect x="20" y="115" width="1110" height="26" rx="4" fill="#fef9c3" />
       <text x="575" y="132" textAnchor="middle" fontSize="11.5" fontWeight="bold" fill="#854d0e" fontFamily="sans-serif">
-        ▲ ทิศทางเวทีและอนุสาวรีย์ ศาสตราจารย์ศิลป์ พีระศรี | ลำดับที่นั่ง: หมายเลขสูงสุด (ซ้ายสุด) ➔ หมายเลข 1 (ขวาสุด)
+        ▲ ทิศทางเวทีและอนุสาวรีย์ ศาสตราจารย์ศิลป์ พีระศรี | ลำดับที่นั่ง: หมายเลข 1 (ซ้ายสุด) ➔ หมายเลขสูงสุด (ขวาสุด)
       </text>
 
       {/* Rows */}

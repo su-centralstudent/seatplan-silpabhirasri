@@ -1,6 +1,6 @@
 import React from 'react';
 import { Seat } from '../types';
-import { Palette } from 'lucide-react';
+import { Palette, Flower2 } from 'lucide-react';
 
 interface SeatCardProps {
   seat: Seat;
@@ -115,17 +115,17 @@ export const SeatCard: React.FC<SeatCardProps> = ({
             </span>
           )}
 
-          {/* Flower Basket Indicator: Clean Asterisk without bulky flower icon */}
+          {/* Flower Basket Indicator: Flower Icon */}
           {seat.hasFlowerBasket && (
             <span 
-              className={`inline-flex items-center justify-center font-bold text-[10px] rounded px-0.5 py-0 leading-none border ${
+              className={`inline-flex items-center justify-center p-0.5 rounded border ${
                 isDarkBg
                   ? 'text-rose-200 bg-rose-900/40 border-rose-400/40'
                   : 'text-rose-600 bg-rose-50 border-rose-200'
               }`} 
-              title="วางกระเช้าดอกไม้ (*)"
+              title="วางกระเช้าดอกไม้"
             >
-              *
+              <Flower2 className="w-2.5 h-2.5" />
             </span>
           )}
 

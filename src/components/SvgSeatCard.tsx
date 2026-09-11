@@ -50,8 +50,8 @@ export const SvgSeatCard: React.FC<SvgSeatCardProps> = ({
 
   let flowerBadgeX = 0;
   if (hasFlowerBasket) {
-    flowerBadgeX = badgeX - 13;
-    badgeX -= 15;
+    flowerBadgeX = badgeX - 14;
+    badgeX -= 16;
   }
 
   let artBadgeX = 0;
@@ -205,30 +205,35 @@ export const SvgSeatCard: React.FC<SvgSeatCardProps> = ({
           <circle cx={statusDotX} cy={3.5 + pillH / 2} r="3" fill="#f59e0b" stroke="#ffffff" strokeWidth="1" />
         )}
 
-        {/* Flower Basket Indicator (*) */}
+        {/* Flower Basket Indicator (Flower Vector Icon) */}
         {hasFlowerBasket && (
           <g transform={`translate(${flowerBadgeX}, 3.5)`}>
             <rect
               x="0"
               y="0"
-              width="13"
+              width="14"
               height={pillH}
               rx="3"
               fill={isDark ? 'rgba(244,63,94,0.35)' : '#fff1f2'}
               stroke={isDark ? '#f43f5e' : '#fecdd3'}
               strokeWidth="0.8"
             />
-            <text
-              x="6.5"
-              y={pillH * 0.78}
-              textAnchor="middle"
-              fontSize={Math.max(9, 10.5 * fontSizeScale)}
-              fontWeight="bold"
-              fill={isDark ? '#fda4af' : '#e11d48'}
-              fontFamily="'Sarabun', 'TH Sarabun New', sans-serif"
+            <svg
+              x="1.5"
+              y={Math.max(1, (pillH - 11) / 2)}
+              width="11"
+              height="11"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke={isDark ? '#fda4af' : '#e11d48'}
+              strokeWidth="2.3"
+              strokeLinecap="round"
+              strokeLinejoin="round"
             >
-              *
-            </text>
+              <path d="M12 5a3 3 0 1 1 5.997.125 4 4 0 0 1 2.526 5.77 4 4 0 0 1-.556 6.588A4 4 0 1 1 12 18Z" />
+              <circle cx="12" cy="12" r="3" />
+              <path d="M12 5a3 3 0 1 0-5.997.125 4 4 0 0 0-2.526 5.77 4 4 0 0 0 .556 6.588A4 4 0 1 0 12 18Z" />
+            </svg>
           </g>
         )}
 
