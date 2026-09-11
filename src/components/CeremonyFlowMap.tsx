@@ -8,6 +8,7 @@ import { DEFAULT_CEREMONY_ROUTES, pointsToSvgPath } from '../data/defaultRoutes'
 import { RouteDrawingOverlay } from './RouteDrawingOverlay';
 import { ExactCeremonyCourtyard100 } from './ExactCeremonyCourtyard100';
 import { convertGoogleDriveUrl } from '../data/googleSheetConfig';
+import { getDefaultPlanImageUrl } from '../data/planConfig';
 
 interface CeremonyFlowMapProps {
   metadata: SeatingPlanMetadata;
@@ -37,15 +38,15 @@ export const CeremonyFlowMap: React.FC<CeremonyFlowMapProps> = ({
 
   const [bgImage, setBgImage] = useState<string | null>(() => {
     if (metadata.bgImageUrl) return metadata.bgImageUrl;
+    const savedDrive = localStorage.getItem('silpa_bhirasri_plan_drive_url');
+    if (savedDrive && savedDrive.trim()) {
+      return convertGoogleDriveUrl(savedDrive.trim());
+    }
     const saved = localStorage.getItem('silpa_bhirasri_plan_bg_image');
-    if (saved && !saved.includes('ceremony_flow_100.svg')) {
+    if (saved && saved.trim()) {
       return saved;
     }
-    const savedDrive = localStorage.getItem('silpa_bhirasri_plan_drive_url');
-    if (savedDrive) {
-      return convertGoogleDriveUrl(savedDrive);
-    }
-    return null;
+    return getDefaultPlanImageUrl();
   });
 
   const [showBgImage, setShowBgImage] = useState<boolean>(true);
@@ -549,7 +550,40 @@ export const CeremonyFlowMap: React.FC<CeremonyFlowMapProps> = ({
                 <input
                   type="url"
                   value={driveInput}
-                  onChange={(e) => setDriveInput(e.target.value)}
+                  onChange={(e) => {
+                    const val = e.target.value;
+                    setDriveInput(val);
+                    const raw = val.trim();
+                    if (!raw) {
+                      const defaultUrl = getDefaultPlanImageUrl();
+                      setBgImage(defaultUrl);
+                      localStorage.removeItem('silpa_bhirasri_plan_drive_url');
+                      localStorage.setItem('silpa_bhirasri_plan_bg_image', defaultUrl);
+                      return;
+                    }
+                    const direct = convertGoogleDriveUrl(raw);
+                    if (direct) {
+                      setBgImage(direct);
+                      setShowBgImage(true);
+                      localStorage.setItem('silpa_bhirasri_plan_drive_url', raw);
+                      localStorage.setItem('silpa_bhirasri_plan_bg_drive_url', raw);
+                      localStorage.setItem('silpa_bhirasri_plan_bg_image', direct);
+                      localStorage.setItem('silpa_bhirasri_plan_show_bg_image', 'true');
+                    }
+                  }}
+                  onPaste={(e) => {
+                    const text = e.clipboardData.getData('text');
+                    if (text && text.trim()) {
+                      const direct = convertGoogleDriveUrl(text.trim());
+                      if (direct) {
+                        setBgImage(direct);
+                        setShowBgImage(true);
+                        localStorage.setItem('silpa_bhirasri_plan_drive_url', text.trim());
+                        localStorage.setItem('silpa_bhirasri_plan_bg_drive_url', text.trim());
+                        localStorage.setItem('silpa_bhirasri_plan_bg_image', direct);
+                      }
+                    }
+                  }}
                   placeholder="https://drive.google.com/file/d/.../view"
                   className="w-full px-3 py-2 bg-white border border-slate-300 rounded-xl text-xs font-mono text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-500"
                 />
@@ -575,9 +609,23 @@ export const CeremonyFlowMap: React.FC<CeremonyFlowMapProps> = ({
                 />
               </div>
 
-              {bgImage && (
-                <div className="pt-2 border-t border-slate-100 flex items-center justify-between">
-                  <span className="text-slate-500">ภาพปัจจุบันกำลังเปิดใช้งาน</span>
+              <div className="pt-2 border-t border-slate-100 flex items-center justify-between">
+                <button
+                  type="button"
+                  onClick={() => {
+                    const defaultUrl = getDefaultPlanImageUrl();
+                    setBgImage(defaultUrl);
+                    setDriveInput('');
+                    localStorage.removeItem('silpa_bhirasri_plan_drive_url');
+                    localStorage.setItem('silpa_bhirasri_plan_bg_image', defaultUrl);
+                    setIsDriveModalOpen(false);
+                  }}
+                  className="text-indigo-600 hover:text-indigo-800 font-semibold cursor-pointer text-[11px] flex items-center gap-1"
+                >
+                  <RotateCcw className="w-3 h-3" />
+                  <span>คืนค่าเป็นภาพเริ่มต้น (Default จาก GitHub)</span>
+                </button>
+                {bgImage && (
                   <button
                     type="button"
                     onClick={() => {
@@ -587,12 +635,12 @@ export const CeremonyFlowMap: React.FC<CeremonyFlowMapProps> = ({
                       localStorage.removeItem('silpa_bhirasri_plan_drive_url');
                       setIsDriveModalOpen(false);
                     }}
-                    className="text-rose-600 hover:text-rose-700 font-semibold cursor-pointer"
+                    className="text-rose-600 hover:text-rose-700 font-semibold cursor-pointer text-[11px]"
                   >
                     ลบภาพออก
                   </button>
-                </div>
-              )}
+                )}
+              </div>
 
               <div className="pt-3 border-t border-slate-200 flex justify-end gap-2">
                 <button

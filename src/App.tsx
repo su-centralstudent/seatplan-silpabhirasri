@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { SeatingPlanState, Seat, UnassignedGuest } from './types';
+import { SeatingPlanState, Seat, UnassignedGuest, SeatingPlanMetadata } from './types';
 import { 
   loadSeatingPlan, saveSeatingPlan, resetToDefaultPlan, 
   exportToJsonFile, exportToCsv 
@@ -32,6 +32,13 @@ import {
   isAutoSyncEnabled 
 } from './data/googleSheetConfig';
 import { getAccessToken } from './utils/googleAuth';
+import { 
+  fetchGitHubPlanConfig, 
+  hasGitHubConfigChanged, 
+  markGitHubConfigApplied, 
+  resolveAssetUrl, 
+  getDefaultPlanImageUrl 
+} from './data/planConfig';
 
 export default function App() {
   const [planState, setPlanState] = useState<SeatingPlanState>(() => loadSeatingPlan());
@@ -42,12 +49,24 @@ export default function App() {
   const [highlightFilter, setHighlightFilter] = useState<string>('');
   const [isImportModalOpen, setIsImportModalOpen] = useState<boolean>(false);
   const [isGoogleSheetModalOpen, setIsGoogleSheetModalOpen] = useState<boolean>(false);
+  const [isSeatingPlanModalOpen, setIsSeatingPlanModalOpen] = useState<boolean>(false);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
 
   // Auto-save to localStorage on change
   useEffect(() => {
     saveSeatingPlan(planState);
   }, [planState]);
+
+  // Update metadata helper (e.g. year, title, etc.)
+  const handleUpdateMetadata = (updated: Partial<SeatingPlanMetadata>) => {
+    setPlanState(prev => ({
+      ...prev,
+      metadata: {
+        ...prev.metadata,
+        ...updated,
+      }
+    }));
+  };
 
   // Toast notification helper
   const showToast = (msg: string) => {
@@ -122,6 +141,39 @@ export default function App() {
 
   // Auto-sync on web load & tab focus (supports GitHub Pages & all browsers)
   useEffect(() => {
+    // 1. Sync plan image / config from GitHub repository (plan_config.json)
+    const syncGitHubPlanConfig = async () => {
+      try {
+        const ghConfig = await fetchGitHubPlanConfig();
+        if (!ghConfig) return;
+
+        if (hasGitHubConfigChanged(ghConfig)) {
+          const directUrl = ghConfig.planDriveUrl
+            ? convertGoogleDriveUrl(ghConfig.planDriveUrl)
+            : resolveAssetUrl(ghConfig.planImageUrl);
+
+          if (directUrl) {
+            markGitHubConfigApplied(ghConfig);
+            setPlanState(prev => ({
+              ...prev,
+              metadata: {
+                ...prev.metadata,
+                bgImageUrl: directUrl,
+                ...(ghConfig.planDriveUrl ? { bgDriveUrl: ghConfig.planDriveUrl } : {}),
+              },
+            }));
+            localStorage.setItem('silpa_bhirasri_plan_bg_image', directUrl);
+            if (ghConfig.planDriveUrl) {
+              localStorage.setItem('silpa_bhirasri_plan_drive_url', ghConfig.planDriveUrl);
+            }
+          }
+        }
+      } catch (err) {
+        console.warn('Silent GitHub plan config check:', err);
+      }
+    };
+
+    // 2. Auto-sync seat data and plan image from Google Sheet
     const autoSyncFromSheet = async () => {
       const sheetUrl = getConfiguredSheetUrl();
       if (!sheetUrl) return;
@@ -208,16 +260,19 @@ export default function App() {
     };
 
     // Run on startup
-    const timer = setTimeout(autoSyncFromSheet, 600);
+    const timer1 = setTimeout(syncGitHubPlanConfig, 300);
+    const timer2 = setTimeout(autoSyncFromSheet, 600);
 
     // Run when user switches back to browser tab
     const handleWindowFocus = () => {
+      syncGitHubPlanConfig();
       autoSyncFromSheet();
     };
     window.addEventListener('focus', handleWindowFocus);
 
     return () => {
-      clearTimeout(timer);
+      clearTimeout(timer1);
+      clearTimeout(timer2);
       window.removeEventListener('focus', handleWindowFocus);
     };
   }, []);
@@ -492,7 +547,7 @@ export default function App() {
   const handleResetDefault = () => {
     const defaultState = resetToDefaultPlan();
     setPlanState(defaultState);
-    showToast('รีเซ็ตผังที่นั่งกลับสู่ร่างเริ่มต้นเรียบร้อยแล้ว');
+    showToast('รีเซ็ตผังที่นั่งและภาพพื้นหลังกลับสู่ค่าเริ่มต้นตาม GitHub เรียบร้อยแล้ว');
   };
 
   // Import JSON file
@@ -538,6 +593,10 @@ export default function App() {
         onExportJson={() => exportToJsonFile(planState)}
         onOpenImport={() => setIsImportModalOpen(true)}
         onOpenGoogleSheets={() => setIsGoogleSheetModalOpen(true)}
+        onOpenSeatingPlanModal={() => {
+          setActiveTab('canvas');
+          setIsSeatingPlanModalOpen(true);
+        }}
         onResetDefault={handleResetDefault}
       />
 
@@ -575,6 +634,40 @@ export default function App() {
                 routes={ceremonyRoutes}
                 onOpenRouteManager={() => setIsRouteModalOpen(true)}
                 onSaveDriveLinkToGoogleSheet={handleSaveDriveLinkToGoogleSheet}
+                isPlanSettingsModalOpen={isSeatingPlanModalOpen}
+                onOpenPlanSettingsModal={() => setIsSeatingPlanModalOpen(true)}
+                onClosePlanSettingsModal={() => setIsSeatingPlanModalOpen(false)}
+                onUpdateMetadata={handleUpdateMetadata}
+                onSyncGitHubPlan={async () => {
+                  const ghConfig = await fetchGitHubPlanConfig();
+                  if (ghConfig) {
+                    const directUrl = ghConfig.planDriveUrl
+                      ? convertGoogleDriveUrl(ghConfig.planDriveUrl)
+                      : resolveAssetUrl(ghConfig.planImageUrl);
+                    if (directUrl) {
+                      markGitHubConfigApplied(ghConfig);
+                      setPlanState(prev => ({
+                        ...prev,
+                        metadata: {
+                          ...prev.metadata,
+                          bgImageUrl: directUrl,
+                          ...(ghConfig.planDriveUrl ? { bgDriveUrl: ghConfig.planDriveUrl } : {}),
+                        },
+                      }));
+                    }
+                  }
+                }}
+                onResetToDefaultPlanImage={() => {
+                  const defaultUrl = getDefaultPlanImageUrl();
+                  setPlanState(prev => ({
+                    ...prev,
+                    metadata: {
+                      ...prev.metadata,
+                      bgImageUrl: defaultUrl,
+                      bgDriveUrl: undefined,
+                    },
+                  }));
+                }}
               />
             )}
 

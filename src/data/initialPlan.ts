@@ -1,4 +1,5 @@
 import { SeatingPlanState, Seat, UnassignedGuest } from '../types';
+import { getDefaultPlanImageUrl } from './planConfig';
 
 export const initialMetadata = {
   eventTitle: 'แผนผังที่นั่งสำหรับแขกผู้มีเกียรติงานวันศิลป์ พีระศรี ในพิธีการ',
@@ -8,6 +9,8 @@ export const initialMetadata = {
   lastUpdated: '15/9/2025',
   ceremonyTime: '16.00 น.',
   notes: '* สัญลักษณ์ดอกจัน (*) หมายถึง มีการวางกระเช้าดอกไม้ | 🎨 หมายถึง มีการวาง Art Set',
+  bgImageUrl: getDefaultPlanImageUrl(),
+  bgDriveUrl: '',
 };
 
 export const defaultUnassignedGuests: UnassignedGuest[] = [

@@ -18,6 +18,7 @@ interface NavbarProps {
   onExportJson: () => void;
   onOpenImport: () => void;
   onOpenGoogleSheets?: () => void;
+  onOpenSeatingPlanModal?: () => void;
   onResetDefault: () => void;
 }
 
@@ -30,6 +31,7 @@ export const Navbar: React.FC<NavbarProps> = ({
   onExportJson,
   onOpenImport,
   onOpenGoogleSheets,
+  onOpenSeatingPlanModal,
   onResetDefault,
 }) => {
   const [isMenuOpen, setIsMenuOpen] = useState<boolean>(false);
@@ -83,27 +85,8 @@ export const Navbar: React.FC<NavbarProps> = ({
               </div>
             </div>
 
-            {/* Right Header: Clean Menu Button */}
+            {/* Right Header: Side Menu Button */}
             <div className="flex items-center gap-2 shrink-0">
-              {/* Active Tab Indicator (Visual indicator) */}
-              <div className="hidden sm:flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium text-slate-600 bg-slate-100 rounded-lg border border-slate-200/80">
-                <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
-                <span>{activeTabLabel}</span>
-              </div>
-
-              {/* Quick Google Sheets Sync Button */}
-              {onOpenGoogleSheets && (
-                <button
-                  type="button"
-                  onClick={onOpenGoogleSheets}
-                  className="hidden sm:flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-emerald-800 bg-emerald-50 hover:bg-emerald-100 border border-emerald-300 rounded-xl transition-all shadow-2xs cursor-pointer active:scale-95"
-                  title="เชื่อมต่อ & ซิงก์ข้อมูลกับ Google Sheets"
-                >
-                  <FileSpreadsheet className="w-3.5 h-3.5 text-emerald-600" />
-                  <span>ซิงก์ Google Sheets</span>
-                </button>
-              )}
-
               {/* Smooth Sidemenu Trigger Button */}
               <button
                 type="button"
@@ -139,12 +122,12 @@ export const Navbar: React.FC<NavbarProps> = ({
               animate={{ x: 0 }}
               exit={{ x: '100%' }}
               transition={{ type: 'spring', damping: 28, stiffness: 300 }}
-              className="relative ml-auto w-[300px] sm:w-[350px] h-full bg-white shadow-2xl flex flex-col z-10 border-l border-slate-200 select-none"
+              className="relative ml-auto w-[270px] sm:w-[300px] h-full bg-white shadow-2xl flex flex-col z-10 border-l border-slate-200 select-none text-xs"
             >
               {/* Drawer Header */}
-              <div className="p-4 border-b border-slate-200 flex items-center justify-between bg-slate-50/70">
-                <div className="flex items-center gap-2.5">
-                  <div className="w-8 h-8 shrink-0 flex items-center justify-center">
+              <div className="px-3.5 py-2.5 border-b border-slate-200 flex items-center justify-between bg-slate-50/80">
+                <div className="flex items-center gap-2">
+                  <div className="w-6 h-6 shrink-0 flex items-center justify-center">
                     <img 
                       src="https://lh3.googleusercontent.com/d/1QdEWReQB6ujnKpX9O9q1Gx1i7akY9Wqb" 
                       alt="ตราสัญลักษณ์" 
@@ -153,77 +136,105 @@ export const Navbar: React.FC<NavbarProps> = ({
                     />
                   </div>
                   <div>
-                    <h2 className="font-bold text-slate-900 text-sm leading-tight">
+                    <h2 className="font-bold text-slate-900 text-xs leading-tight">
                       เมนูระบบผังที่นั่ง
                     </h2>
-                    <p className="text-2xs text-slate-500">
-                      {metadata.venueName || 'ลานศาสตราจารย์ศิลป์ พีระศรี'}
-                    </p>
                   </div>
                 </div>
 
                 <button
                   type="button"
                   onClick={() => setIsMenuOpen(false)}
-                  className="p-1.5 text-slate-400 hover:text-slate-800 hover:bg-slate-200 rounded-lg transition-colors cursor-pointer"
+                  className="p-1 text-slate-400 hover:text-slate-800 hover:bg-slate-200 rounded-lg transition-colors cursor-pointer"
                   aria-label="ปิดเมนู"
                 >
-                  <X className="w-5 h-5" />
+                  <X className="w-4 h-4" />
                 </button>
               </div>
 
               {/* Drawer Content */}
-              <div className="flex-1 overflow-y-auto p-4 space-y-6">
+              <div className="flex-1 overflow-y-auto p-2.5 space-y-3">
                 {/* Section 1: Navigation Tabs */}
-                <div className="space-y-1.5">
-                  <span className="text-2xs font-bold text-slate-400 uppercase tracking-wider block px-2">
+                <div className="space-y-1">
+                  <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block px-1">
                     เลือกมุมมองแผนผัง
                   </span>
 
                   <button
                     type="button"
                     onClick={() => handleTabClick('canvas')}
-                    className={`w-full flex items-center justify-between p-3 rounded-xl text-sm font-medium transition-all cursor-pointer ${
+                    className={`w-full flex items-center justify-between px-2.5 py-2 rounded-lg text-xs font-medium transition-all cursor-pointer ${
                       activeTab === 'canvas'
-                        ? 'bg-slate-900 text-white shadow-sm'
+                        ? 'bg-slate-900 text-white shadow-2xs'
                         : 'text-slate-700 hover:bg-slate-100'
                     }`}
                   >
-                    <div className="flex items-center gap-3">
-                      <LayoutGrid className={`w-4 h-4 ${activeTab === 'canvas' ? 'text-white' : 'text-slate-500'}`} />
+                    <div className="flex items-center gap-2">
+                      <LayoutGrid className={`w-3.5 h-3.5 ${activeTab === 'canvas' ? 'text-white' : 'text-slate-500'}`} />
                       <span>ผังที่นั่งภาพรวม</span>
                     </div>
                     {activeTab === 'canvas' ? (
-                      <Check className="w-4 h-4 text-emerald-400" />
+                      <Check className="w-3.5 h-3.5 text-emerald-400" />
                     ) : (
-                      <ChevronRight className="w-4 h-4 opacity-40" />
+                      <ChevronRight className="w-3.5 h-3.5 opacity-40" />
                     )}
                   </button>
 
                   <button
                     type="button"
                     onClick={() => handleTabClick('table')}
-                    className={`w-full flex items-center justify-between p-3 rounded-xl text-sm font-medium transition-all cursor-pointer ${
+                    className={`w-full flex items-center justify-between px-2.5 py-2 rounded-lg text-xs font-medium transition-all cursor-pointer ${
                       activeTab === 'table'
-                        ? 'bg-slate-900 text-white shadow-sm'
+                        ? 'bg-slate-900 text-white shadow-2xs'
                         : 'text-slate-700 hover:bg-slate-100'
                     }`}
                   >
-                    <div className="flex items-center gap-3">
-                      <List className={`w-4 h-4 ${activeTab === 'table' ? 'text-white' : 'text-slate-500'}`} />
+                    <div className="flex items-center gap-2">
+                      <List className={`w-3.5 h-3.5 ${activeTab === 'table' ? 'text-white' : 'text-slate-500'}`} />
                       <span>รายชื่อแขกผู้มีเกียรติ</span>
                     </div>
                     {activeTab === 'table' ? (
-                      <Check className="w-4 h-4 text-emerald-400" />
+                      <Check className="w-3.5 h-3.5 text-emerald-400" />
                     ) : (
-                      <ChevronRight className="w-4 h-4 opacity-40" />
+                      <ChevronRight className="w-3.5 h-3.5 opacity-40" />
                     )}
                   </button>
                 </div>
 
+                {/* Section: Seating Plan Settings Modal Menu (ผังที่นั่ง) */}
+                {onOpenSeatingPlanModal && (
+                  <div className="space-y-1 pt-1.5 border-t border-slate-100">
+                    <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block px-1">
+                      ตั้งค่าและเลือกผัง
+                    </span>
+
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setIsMenuOpen(false);
+                        onOpenSeatingPlanModal();
+                      }}
+                      className="w-full flex items-center justify-between px-2.5 py-2 rounded-lg text-xs font-medium text-slate-800 bg-blue-50/80 hover:bg-blue-100/80 border border-blue-200/90 transition-all cursor-pointer group shadow-2xs"
+                    >
+                      <div className="flex items-center gap-2">
+                        <div className="w-6 h-6 rounded-md bg-blue-600 text-white flex items-center justify-center shrink-0 shadow-2xs group-hover:bg-blue-700 transition-colors">
+                          <LayoutGrid className="w-3.5 h-3.5" />
+                        </div>
+                        <span className="font-semibold text-slate-900">ผังที่นั่ง</span>
+                      </div>
+                      <div className="flex items-center gap-1">
+                        <span className="px-1.5 py-0.5 text-[10px] bg-blue-200/80 text-blue-800 font-semibold rounded">
+                          ตั้งค่า
+                        </span>
+                        <ChevronRight className="w-3.5 h-3.5 text-blue-600 opacity-60 group-hover:opacity-100 group-hover:translate-x-0.5 transition-all" />
+                      </div>
+                    </button>
+                  </div>
+                )}
+
                 {/* Section 2: Actions & Tools */}
-                <div className="space-y-1.5 pt-2 border-t border-slate-100">
-                  <span className="text-2xs font-bold text-slate-400 uppercase tracking-wider block px-2">
+                <div className="space-y-1 pt-1.5 border-t border-slate-100">
+                  <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block px-1">
                     คำสั่งการจัดการ & ส่งออก
                   </span>
 
@@ -235,23 +246,16 @@ export const Navbar: React.FC<NavbarProps> = ({
                         setIsMenuOpen(false);
                         onOpenGoogleSheets();
                       }}
-                      className="w-full flex items-center justify-between p-3 rounded-xl text-sm font-medium text-emerald-950 bg-emerald-50/80 hover:bg-emerald-100 border border-emerald-300/80 transition-all cursor-pointer group shadow-2xs"
+                      className="w-full flex items-center justify-between px-2.5 py-2 rounded-lg text-xs font-medium text-emerald-950 bg-emerald-50/80 hover:bg-emerald-100 border border-emerald-300/80 transition-all cursor-pointer group shadow-2xs"
                       title="เชื่อมต่อ & ซิงก์ข้อมูลกับ Google Sheets"
                     >
-                      <div className="flex items-center gap-3">
-                        <div className="w-8 h-8 rounded-lg bg-emerald-600 text-white flex items-center justify-center shrink-0 shadow-xs group-hover:bg-emerald-700 transition-colors">
-                          <FileSpreadsheet className="w-4 h-4" />
+                      <div className="flex items-center gap-2">
+                        <div className="w-6 h-6 rounded-md bg-emerald-600 text-white flex items-center justify-center shrink-0 shadow-2xs group-hover:bg-emerald-700 transition-colors">
+                          <FileSpreadsheet className="w-3.5 h-3.5" />
                         </div>
-                        <div className="text-left">
-                          <div className="font-semibold text-emerald-950 text-xs sm:text-sm leading-tight">
-                            เชื่อมต่อ Google Sheets
-                          </div>
-                          <div className="text-2xs text-emerald-700 mt-0.5">
-                            ซิงก์รายชื่อแขกและที่นั่งอัตโนมัติ
-                          </div>
-                        </div>
+                        <span className="font-semibold text-emerald-950">เชื่อมต่อ Google Sheets</span>
                       </div>
-                      <span className="text-[10px] font-bold px-2 py-0.5 bg-white text-emerald-800 rounded-md border border-emerald-300 shrink-0">
+                      <span className="text-[10px] font-bold px-1.5 py-0.5 bg-white text-emerald-800 rounded border border-emerald-300 shrink-0">
                         Sync
                       </span>
                     </button>
@@ -267,21 +271,14 @@ export const Navbar: React.FC<NavbarProps> = ({
                         onPrint();
                       }
                     }}
-                    className="w-full flex items-center justify-between p-3 rounded-xl text-sm font-medium text-slate-800 bg-rose-50/60 hover:bg-rose-100/70 border border-rose-200/80 transition-all cursor-pointer group"
-                    title="บันทึกเป็น PDF 5 หน้า: ผังรวม + ผังย่อยโซนสีเขียว, สีฟ้า, สีฟ้าขวา, สีเหลืองขวา (A4 แนวนอน)"
+                    className="w-full flex items-center justify-between px-2.5 py-2 rounded-lg text-xs font-medium text-slate-800 bg-rose-50/60 hover:bg-rose-100/70 border border-rose-200/80 transition-all cursor-pointer group shadow-2xs"
+                    title="บันทึกเป็น PDF 5 หน้า: ผังรวม + ผังย่อย 4 โซน (A4 แนวนอน)"
                   >
-                    <div className="flex items-center gap-3">
-                      <div className="w-8 h-8 rounded-lg bg-rose-100 border border-rose-300/80 flex items-center justify-center shrink-0 group-hover:bg-rose-200 transition-colors">
-                        <FileDown className="w-4 h-4 text-rose-700" />
+                    <div className="flex items-center gap-2">
+                      <div className="w-6 h-6 rounded-md bg-rose-100 border border-rose-300/80 flex items-center justify-center shrink-0 group-hover:bg-rose-200 transition-colors">
+                        <FileDown className="w-3.5 h-3.5 text-rose-700" />
                       </div>
-                      <div className="text-left">
-                        <div className="font-semibold text-slate-900 text-xs sm:text-sm leading-tight">
-                          บันทึกเป็น PDF (Save as PDF)
-                        </div>
-                        <div className="text-2xs text-slate-500 mt-0.5">
-                          ผังรวม + ผังย่อย 4 โซน (5 หน้า A4 แนวนอน)
-                        </div>
-                      </div>
+                      <span className="font-semibold text-slate-900">บันทึกเป็น PDF (Save as PDF)</span>
                     </div>
                     <span className="text-[10px] font-bold px-1.5 py-0.5 bg-white text-rose-700 rounded border border-rose-200 shrink-0">
                       5 หน้า A4
@@ -294,10 +291,10 @@ export const Navbar: React.FC<NavbarProps> = ({
                       setIsMenuOpen(false);
                       onPrint();
                     }}
-                    className="w-full flex items-center gap-3 px-3 py-2 rounded-xl text-xs font-medium text-slate-600 hover:text-slate-900 hover:bg-slate-100 transition-colors cursor-pointer"
+                    className="w-full flex items-center gap-2 px-2.5 py-1.5 rounded-lg text-xs font-medium text-slate-600 hover:text-slate-900 hover:bg-slate-100 transition-colors cursor-pointer"
                   >
                     <Printer className="w-3.5 h-3.5 text-slate-500" />
-                    <span>พิมพ์ผ่านเบราว์เซอร์ (Browser Print)</span>
+                    <span>พิมพ์ผ่านเบราว์เซอร์</span>
                   </button>
 
                   <button
@@ -306,9 +303,9 @@ export const Navbar: React.FC<NavbarProps> = ({
                       setIsMenuOpen(false);
                       onOpenImport();
                     }}
-                    className="w-full flex items-center gap-3 p-3 rounded-xl text-sm font-medium text-slate-800 hover:bg-slate-100 transition-colors cursor-pointer"
+                    className="w-full flex items-center gap-2 px-2.5 py-1.5 rounded-lg text-xs font-medium text-slate-700 hover:bg-slate-100 transition-colors cursor-pointer"
                   >
-                    <Upload className="w-4 h-4 text-slate-600" />
+                    <Upload className="w-3.5 h-3.5 text-slate-500" />
                     <span>นำเข้ารายชื่อแขก (JSON)</span>
                   </button>
 
@@ -318,9 +315,9 @@ export const Navbar: React.FC<NavbarProps> = ({
                       setIsMenuOpen(false);
                       onExportJson();
                     }}
-                    className="w-full flex items-center gap-3 p-3 rounded-xl text-sm font-medium text-slate-800 hover:bg-slate-100 transition-colors cursor-pointer"
+                    className="w-full flex items-center gap-2 px-2.5 py-1.5 rounded-lg text-xs font-medium text-slate-700 hover:bg-slate-100 transition-colors cursor-pointer"
                   >
-                    <Download className="w-4 h-4 text-slate-600" />
+                    <Download className="w-3.5 h-3.5 text-slate-500" />
                     <span>บันทึกและส่งออกข้อมูล (JSON)</span>
                   </button>
 
@@ -332,18 +329,17 @@ export const Navbar: React.FC<NavbarProps> = ({
                         onResetDefault();
                       }
                     }}
-                    className="w-full flex items-center gap-3 p-3 rounded-xl text-sm font-medium text-rose-600 hover:bg-rose-50 transition-colors cursor-pointer mt-2"
+                    className="w-full flex items-center gap-2 px-2.5 py-1.5 rounded-lg text-xs font-medium text-rose-600 hover:bg-rose-50 transition-colors cursor-pointer mt-1"
                   >
-                    <RotateCcw className="w-4 h-4 text-rose-500" />
+                    <RotateCcw className="w-3.5 h-3.5 text-rose-500" />
                     <span>รีเซ็ตผังกลับสู่ค่าเริ่มต้น</span>
                   </button>
                 </div>
               </div>
 
               {/* Drawer Footer */}
-              <div className="p-3.5 border-t border-slate-100 bg-slate-50 text-2xs text-slate-500">
-                <p className="font-semibold text-slate-700 truncate">{metadata.venueName || 'ลานศาสตราจารย์ศิลป์ พีระศรี'}</p>
-                <p className="text-slate-400 mt-0.5">ระบบจัดการผังที่นั่งพิธีการวันศิลป์ พีระศรี</p>
+              <div className="px-3 py-2 border-t border-slate-100 bg-slate-50 text-[11px] text-slate-500 text-center font-medium">
+                <span className="text-slate-600 truncate block">{metadata.venueName || 'ลานศาสตราจารย์ศิลป์ พีระศรี'}</span>
               </div>
             </motion.div>
           </div>

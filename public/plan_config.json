@@ -1,0 +1,9 @@
+{
+  "version": "1.0",
+  "planImageUrl": "/assets/ceremony_flow_100.svg",
+  "planDriveUrl": "",
+  "googleSheetUrl": "",
+  "opacity": 0.95,
+  "description": "Seating plan configuration synced with GitHub repository. Update this file on GitHub to automatically update the seating plan image for all users.",
+  "lastUpdated": "2026-09-11"
+}

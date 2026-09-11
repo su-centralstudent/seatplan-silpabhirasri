@@ -2,14 +2,23 @@ import React, { useState, useRef, useEffect } from 'react';
 import { Seat, SeatingPlanMetadata, CeremonyRoute } from '../types';
 import { 
   ZoomIn, ZoomOut, RotateCcw, 
-  X, PenTool, Image as ImageIcon,
+  X, Image as ImageIcon,
   Sliders, Trash2, Eye, EyeOff, Upload,
   Plus, Minus, Settings, Check,
   Link as LinkIcon, ExternalLink, RefreshCw,
-  FileSpreadsheet, RotateCw
+  FileSpreadsheet, RotateCw, Copy, LayoutGrid
 } from 'lucide-react';
-import { useDrawingCanvas } from '../hooks/useDrawingCanvas';
 import { SeatCard } from './SeatCard';
+import { SeatingPlanModal } from './SeatingPlanModal';
+import { 
+  getDefaultPlanImageUrl, 
+  getDefaultPlanDriveUrl,
+  setDefaultPlanUrl,
+  resolveAssetUrl, 
+  fetchGitHubPlanConfig, 
+  markGitHubConfigApplied, 
+  generatePlanConfigFileContent 
+} from '../data/planConfig';
 
 /**
  * Converts various Google Drive link formats into direct embeddable image URLs:
@@ -63,6 +72,12 @@ interface SeatingCanvasProps {
   onOpenRouteManager?: () => void;
   onOpenGoogleSheets?: () => void;
   onSaveDriveLinkToGoogleSheet?: (driveUrl: string) => Promise<{ success: boolean; message: string }>;
+  onSyncGitHubPlan?: () => Promise<void>;
+  onResetToDefaultPlanImage?: () => void;
+  isPlanSettingsModalOpen?: boolean;
+  onOpenPlanSettingsModal?: () => void;
+  onClosePlanSettingsModal?: () => void;
+  onUpdateMetadata?: (metadata: Partial<SeatingPlanMetadata>) => void;
 }
 
 export const SeatingCanvas: React.FC<SeatingCanvasProps> = ({
@@ -80,7 +95,18 @@ export const SeatingCanvas: React.FC<SeatingCanvasProps> = ({
   onOpenRouteManager,
   onOpenGoogleSheets,
   onSaveDriveLinkToGoogleSheet,
+  onSyncGitHubPlan,
+  onResetToDefaultPlanImage,
+  isPlanSettingsModalOpen,
+  onOpenPlanSettingsModal,
+  onClosePlanSettingsModal,
+  onUpdateMetadata,
 }) => {
+  const [internalPlanModalOpen, setInternalPlanModalOpen] = useState<boolean>(false);
+  const isPlanModalOpen = isPlanSettingsModalOpen !== undefined ? isPlanSettingsModalOpen : internalPlanModalOpen;
+  const handleOpenPlanModal = onOpenPlanSettingsModal || (() => setInternalPlanModalOpen(true));
+  const handleClosePlanModal = onClosePlanSettingsModal || (() => setInternalPlanModalOpen(false));
+
   const [zoomLevel, setZoomLevel] = useState<number>(1);
   const [activeFlowRoute, setActiveFlowRoute] = useState<'all' | 'none'>('all');
   const [activeEditZone, setActiveEditZone] = useState<EditZone>('none');
@@ -90,31 +116,100 @@ export const SeatingCanvas: React.FC<SeatingCanvasProps> = ({
   // Background Image management (Allows embedding Google Drive image link & local upload)
   type BgPlacementMode = 'stage' | 'full';
 
-  // Drive URL input & background image state (Default: null, original system image removed)
+  // Drive URL input & background image state (Default: configured system/GitHub plan image)
   const [driveUrlInput, setDriveUrlInput] = useState<string>(() => {
-    return localStorage.getItem('silpa_bhirasri_plan_drive_url') || '';
+    return metadata.bgDriveUrl || localStorage.getItem('silpa_bhirasri_plan_drive_url') || '';
   });
   const [driveUrlError, setDriveUrlError] = useState<string | null>(null);
 
   const [bgImage, setBgImage] = useState<string | null>(() => {
-    const saved = localStorage.getItem('silpa_bhirasri_plan_bg_image');
-    // If it was the old system svg or default, clear it out completely
-    if (saved && (saved.includes('ceremony_flow_100.svg') || saved === '/assets/ceremony_flow_100.svg')) {
-      localStorage.removeItem('silpa_bhirasri_plan_bg_image');
-      localStorage.removeItem('silpa_bhirasri_system_default_image');
-      return null;
+    // 1. Check metadata from props first
+    if (metadata.bgImageUrl) {
+      return metadata.bgImageUrl;
     }
-    if (saved) return saved;
-
-    // Check if there was a saved Google Drive URL
+    // 2. Check saved Google Drive URL
     const savedDrive = localStorage.getItem('silpa_bhirasri_plan_drive_url');
-    if (savedDrive) {
-      return convertGoogleDriveUrl(savedDrive);
+    if (savedDrive && savedDrive.trim()) {
+      return convertGoogleDriveUrl(savedDrive.trim());
     }
-
-    // Default: null (original system image removed as requested)
-    return null;
+    // 3. Check saved custom image
+    const saved = localStorage.getItem('silpa_bhirasri_plan_bg_image');
+    if (saved && saved.trim()) {
+      return saved;
+    }
+    // 4. Default: Return system default plan image (ceremony_flow_100.svg / GitHub plan_config)
+    return getDefaultPlanImageUrl();
   });
+
+  const [isSyncingGitHub, setIsSyncingGitHub] = useState<boolean>(false);
+  const [gitHubSyncMsg, setGitHubSyncMsg] = useState<string | null>(null);
+  const [copiedConfigJson, setCopiedConfigJson] = useState<boolean>(false);
+
+  // Reset to default plan image (Current default plan link or system plan)
+  const handleResetToDefaultImage = () => {
+    const defaultUrl = getDefaultPlanImageUrl();
+    const defaultDrive = getDefaultPlanDriveUrl();
+    setBgImage(defaultUrl);
+    setDriveUrlInput(defaultDrive);
+    setDriveUrlError(null);
+    if (defaultDrive) {
+      localStorage.setItem('silpa_bhirasri_plan_drive_url', defaultDrive);
+    } else {
+      localStorage.removeItem('silpa_bhirasri_plan_drive_url');
+    }
+    localStorage.setItem('silpa_bhirasri_plan_bg_image', defaultUrl);
+    setShowBgImage(true);
+    if (onResetToDefaultPlanImage) {
+      onResetToDefaultPlanImage();
+    }
+  };
+
+  // Sync plan config manually from GitHub
+  const handleManualGitHubSync = async () => {
+    setIsSyncingGitHub(true);
+    setGitHubSyncMsg(null);
+    try {
+      const ghConfig = await fetchGitHubPlanConfig();
+      if (ghConfig) {
+        const newDirectImage = ghConfig.planDriveUrl
+          ? convertGoogleDriveUrl(ghConfig.planDriveUrl)
+          : resolveAssetUrl(ghConfig.planImageUrl);
+        
+        if (newDirectImage) {
+          markGitHubConfigApplied(ghConfig);
+          setBgImage(newDirectImage);
+          if (ghConfig.planDriveUrl) {
+            setDriveUrlInput(ghConfig.planDriveUrl);
+            localStorage.setItem('silpa_bhirasri_plan_drive_url', ghConfig.planDriveUrl);
+          } else {
+            localStorage.setItem('silpa_bhirasri_plan_bg_image', newDirectImage);
+          }
+          setShowBgImage(true);
+          setGitHubSyncMsg(`ซิงก์สำเร็จ! อัปเดตภาพจาก GitHub เรียบร้อยแล้ว (v${ghConfig.version})`);
+          if (onSyncGitHubPlan) await onSyncGitHubPlan();
+        } else {
+          setGitHubSyncMsg('ไม่พบ URL ภาพในไฟล์คอนฟิก GitHub');
+        }
+      } else {
+        setGitHubSyncMsg('ไม่สามารถติดต่อไฟล์ public/plan_config.json ได้');
+      }
+    } catch (err: any) {
+      setGitHubSyncMsg(`เกิดข้อผิดพลาด: ${err?.message || 'ไม่ทราบสาเหตุ'}`);
+    } finally {
+      setIsSyncingGitHub(false);
+    }
+  };
+
+  const handleCopyGitHubConfigJson = () => {
+    const jsonStr = generatePlanConfigFileContent(
+      bgImage || '/assets/ceremony_flow_100.svg',
+      driveUrlInput || '',
+      metadata.googleSheetUrl || ''
+    );
+    navigator.clipboard.writeText(jsonStr);
+    setCopiedConfigJson(true);
+    setTimeout(() => setCopiedConfigJson(false), 3000);
+  };
 
   const [bgOpacity, setBgOpacity] = useState<number>(() => {
     const saved = localStorage.getItem('silpa_bhirasri_plan_bg_opacity');
@@ -152,50 +247,63 @@ export const SeatingCanvas: React.FC<SeatingCanvasProps> = ({
   const [isDragOver, setIsDragOver] = useState<boolean>(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // Apply Google Drive Link or Web Image URL
-  const handleApplyDriveUrl = (e?: React.FormEvent) => {
-    if (e) e.preventDefault();
-    setDriveUrlError(null);
-    const raw = driveUrlInput.trim();
+  // Instantly apply Google Drive Link or Web Image URL upon typing or pasting
+  const handleDriveUrlInputChange = (val: string) => {
+    setDriveUrlInput(val);
+    const raw = val.trim();
     if (!raw) {
-      handleRemoveBgImage();
+      setDriveUrlError(null);
+      const defaultUrl = getDefaultPlanImageUrl();
+      setBgImage(defaultUrl);
+      localStorage.removeItem('silpa_bhirasri_plan_drive_url');
+      localStorage.setItem('silpa_bhirasri_plan_bg_image', defaultUrl);
       return;
     }
+
     const directUrl = convertGoogleDriveUrl(raw);
-    if (!directUrl) {
-      setDriveUrlError('กรุณาระบุลิงก์รูปภาพที่ถูกต้อง');
-      return;
+    if (directUrl) {
+      setDriveUrlError(null);
+      setBgImage(directUrl);
+      setShowBgImage(true);
+      localStorage.setItem('silpa_bhirasri_plan_bg_image', directUrl);
+      localStorage.setItem('silpa_bhirasri_plan_drive_url', raw);
+      setDefaultPlanUrl(raw);
     }
-    setBgImage(directUrl);
-    setShowBgImage(true);
-    localStorage.setItem('silpa_bhirasri_plan_bg_image', directUrl);
-    localStorage.setItem('silpa_bhirasri_plan_drive_url', raw);
   };
 
-  // Remove Background Image completely (clear to clean background)
+  // Apply Google Drive Link or Web Image URL (also usable on form submit / Enter key)
+  const handleApplyDriveUrl = (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    handleDriveUrlInputChange(driveUrlInput);
+  };
+
+  // Remove Background Image / Revert to default plan link
   const handleRemoveBgImage = () => {
-    setBgImage(null);
-    setDriveUrlInput('');
-    setDriveUrlError(null);
-    localStorage.removeItem('silpa_bhirasri_plan_bg_image');
-    localStorage.removeItem('silpa_bhirasri_plan_drive_url');
-    localStorage.removeItem('silpa_bhirasri_system_default_image');
+    handleResetToDefaultImage();
     if (fileInputRef.current) fileInputRef.current.value = '';
   };
 
-  // Hand-drawing tools
-  const [isDrawingMode, setIsDrawingMode] = useState<boolean>(false);
-  const drawingTools = useDrawingCanvas(isDrawingMode);
-
-  // Sync background image whenever metadata updates from Google Sheet
+  // Sync background image whenever metadata updates from Google Sheet and establish as default
   useEffect(() => {
     if (metadata.bgImageUrl) {
       setBgImage(metadata.bgImageUrl);
-      if (metadata.bgDriveUrl) {
-        setDriveUrlInput(metadata.bgDriveUrl);
-      }
+    } else if (metadata.bgDriveUrl) {
+      setBgImage(convertGoogleDriveUrl(metadata.bgDriveUrl));
+    }
+    if (metadata.bgDriveUrl) {
+      setDriveUrlInput(metadata.bgDriveUrl);
+      setDefaultPlanUrl(metadata.bgDriveUrl);
+    } else if (driveUrlInput) {
+      setDefaultPlanUrl(driveUrlInput);
     }
   }, [metadata.bgImageUrl, metadata.bgDriveUrl]);
+
+  // Compute effective plan image: ALWAYS display plan image according to link
+  const effectiveBgImage = bgImage 
+    || (driveUrlInput ? convertGoogleDriveUrl(driveUrlInput) : '') 
+    || metadata.bgImageUrl 
+    || (metadata.bgDriveUrl ? convertGoogleDriveUrl(metadata.bgDriveUrl) : '') 
+    || getDefaultPlanImageUrl();
 
   // Save to Google Sheet state
   const [isSavingToSheet, setIsSavingToSheet] = useState<boolean>(false);
@@ -428,78 +536,25 @@ export const SeatingCanvas: React.FC<SeatingCanvasProps> = ({
 
               <span className="text-slate-300">|</span>
 
-              <span className="font-semibold text-slate-700">เลือกดูผังย่อย:</span>
-              <div className="flex items-center gap-1">
-                <button
-                  type="button"
-                  onClick={() => setActiveEditZone(activeEditZone === 'pink' || activeEditZone === 'A-EX' ? 'none' : 'pink')}
-                  className={`px-2.5 py-1 rounded-md border text-xs font-medium transition-colors ${
-                    activeEditZone === 'pink' || activeEditZone === 'A-EX'
-                      ? 'bg-rose-700 text-white border-rose-800'
-                      : 'bg-rose-50 text-rose-800 border-rose-300 hover:bg-rose-100'
-                  }`}
+              {/* Dropdown for Sub-zone Selection */}
+              <div className="flex items-center gap-1.5 bg-white border border-slate-300 rounded-lg px-2.5 py-1 shadow-2xs">
+                <label htmlFor="select-sub-zone-plan" className="font-semibold text-slate-700 text-xs shrink-0 cursor-pointer">
+                  ผังย่อย:
+                </label>
+                <select
+                  id="select-sub-zone-plan"
+                  value={activeEditZone}
+                  onChange={(e) => setActiveEditZone(e.target.value as EditZone)}
+                  className="bg-transparent font-medium text-xs text-slate-800 focus:outline-none cursor-pointer pr-1"
                 >
-                  โซนสีชมพู (A-E)
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setActiveEditZone(activeEditZone === 'yellow' || activeEditZone === 'E' ? 'none' : 'yellow')}
-                  className={`px-2.5 py-1 rounded-md border text-xs font-medium transition-colors ${
-                    activeEditZone === 'yellow' || activeEditZone === 'E'
-                      ? 'bg-amber-700 text-white border-amber-800'
-                      : 'bg-amber-50 text-amber-800 border-amber-300 hover:bg-amber-100'
-                  }`}
-                >
-                  โซนสีเหลือง (F-H)
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setActiveEditZone(activeEditZone === 'green-right' || activeEditZone === 'F' ? 'none' : 'green-right')}
-                  className={`px-2.5 py-1 rounded-md border text-xs font-medium transition-colors ${
-                    activeEditZone === 'green-right' || activeEditZone === 'F'
-                      ? 'bg-lime-700 text-white border-lime-800'
-                      : 'bg-lime-50 text-lime-800 border-lime-300 hover:bg-lime-100'
-                  }`}
-                >
-                  โซนสีเขียวขวา (I)
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setActiveEditZone(activeEditZone === 'peach-right' || activeEditZone === 'GH' ? 'none' : 'peach-right')}
-                  className={`px-2.5 py-1 rounded-md border text-xs font-medium transition-colors ${
-                    activeEditZone === 'peach-right' || activeEditZone === 'GH'
-                      ? 'bg-orange-700 text-white border-orange-800'
-                      : 'bg-orange-50 text-orange-900 border-orange-300 hover:bg-orange-100'
-                  }`}
-                >
-                  โซนสีส้มอ่อนขวา (J-K)
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setActiveEditZone(activeEditZone === 'ALL' ? 'none' : 'ALL')}
-                  className={`px-2.5 py-1 rounded-md border text-xs font-medium transition-colors ${
-                    activeEditZone === 'ALL'
-                      ? 'bg-slate-800 text-white border-slate-800'
-                      : 'bg-white text-slate-700 border-slate-300 hover:bg-slate-100'
-                  }`}
-                >
-                  {activeEditZone === 'ALL' ? 'ซ่อนผังแก้ไข' : 'แสดงทั้งหมด'}
-                </button>
+                  <option value="none">ผังรวมทั้งหมด (Default)</option>
+                  <option value="pink">โซนสีชมพู (แถว A - E)</option>
+                  <option value="yellow">โซนสีเหลือง (แถว F - H)</option>
+                  <option value="green-right">โซนสีเขียวขวา (แถว I)</option>
+                  <option value="peach-right">โซนสีส้มอ่อนขวา (แถว J - K)</option>
+                  <option value="ALL">แสดงผังแก้ไขทุกโซน</option>
+                </select>
               </div>
-
-              {/* Hand-drawing button */}
-              <button
-                type="button"
-                onClick={() => setIsDrawingMode(!isDrawingMode)}
-                className={`px-3 py-1 rounded-md border text-xs font-medium flex items-center gap-1.5 transition-colors cursor-pointer ${
-                  isDrawingMode
-                    ? 'bg-amber-600 text-white border-amber-700 ring-2 ring-amber-400'
-                    : 'bg-amber-50 text-amber-900 border-amber-300 hover:bg-amber-100'
-                }`}
-              >
-                <PenTool className="w-3.5 h-3.5" />
-                <span>{isDrawingMode ? 'เปิดโหมดวาดด้วยมือ' : '✏️ ลากเส้นทางเดินด้วยมือ'}</span>
-              </button>
             </div>
 
             {/* Zoom Controls */}
@@ -533,23 +588,6 @@ export const SeatingCanvas: React.FC<SeatingCanvasProps> = ({
               </button>
             </div>
           </div>
-
-          {/* Quick Drawing Controls if active */}
-          {isDrawingMode && (
-            <div className="px-4 py-2 bg-amber-50 border-b border-amber-200 flex flex-wrap items-center justify-between gap-3 text-xs">
-              <div className="flex items-center gap-2">
-                <span className="font-semibold text-amber-900">โหมดวาดเส้นทางเดิน:</span>
-                <span className="text-amber-800">คลิกแล้วลากเพื่อวาดเส้นทางเดินตามต้องการ</span>
-                <button
-                  type="button"
-                  onClick={drawingTools.clearActiveCustomPath}
-                  className="px-2 py-0.5 bg-white hover:bg-amber-100 text-amber-800 border border-amber-300 rounded font-medium ml-2"
-                >
-                  ล้างเส้นวาด
-                </button>
-              </div>
-            </div>
-          )}
         </div>
       )}
 
@@ -635,7 +673,7 @@ export const SeatingCanvas: React.FC<SeatingCanvasProps> = ({
                   </div>
 
                   {/* Image Preview if available */}
-                  {bgImage && (
+                  {bgImage ? (
                     <div>
                       <h5 className="text-xs font-bold text-slate-900 mb-1.5">ตัวอย่างภาพที่กำลังใช้งาน:</h5>
                       <div className="relative rounded-xl border border-slate-200 bg-slate-100 p-1.5 overflow-hidden flex items-center justify-center max-h-36">
@@ -648,13 +686,36 @@ export const SeatingCanvas: React.FC<SeatingCanvasProps> = ({
                           }}
                         />
                       </div>
+                      <div className="flex gap-1.5 mt-2">
+                        <button
+                          type="button"
+                          onClick={handleResetToDefaultImage}
+                          className="flex-1 py-1.5 px-2 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 font-semibold text-xs rounded-xl border border-indigo-200 transition-colors flex items-center justify-center gap-1 cursor-pointer"
+                          title="คืนค่าเป็นภาพเริ่มต้นที่เชื่อมต่อกับ GitHub"
+                        >
+                          <RotateCcw className="w-3.5 h-3.5" />
+                          <span>คืนค่า Default (GitHub)</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={handleRemoveBgImage}
+                          className="py-1.5 px-2.5 bg-rose-50 hover:bg-rose-100 text-rose-700 font-semibold text-xs rounded-xl border border-rose-200 transition-colors flex items-center justify-center gap-1 cursor-pointer"
+                          title="ลบภาพผังนี้ออก (ให้พื้นหลังว่าง)"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                          <span>ลบภาพ</span>
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="pt-2">
                       <button
                         type="button"
-                        onClick={handleRemoveBgImage}
-                        className="mt-2 w-full py-1.5 px-3 bg-rose-50 hover:bg-rose-100 text-rose-700 font-semibold text-xs rounded-xl border border-rose-200 transition-colors flex items-center justify-center gap-1.5 cursor-pointer"
+                        onClick={handleResetToDefaultImage}
+                        className="w-full py-2 px-3 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 font-semibold text-xs rounded-xl border border-indigo-200 transition-colors flex items-center justify-center gap-1.5 cursor-pointer"
                       >
-                        <Trash2 className="w-3.5 h-3.5" />
-                        <span>ลบภาพผังนี้ออก (ให้พื้นหลังว่าง)</span>
+                        <RotateCcw className="w-3.5 h-3.5" />
+                        <span>โหลดภาพผัง Default จาก GitHub</span>
                       </button>
                     </div>
                   )}
@@ -677,14 +738,20 @@ export const SeatingCanvas: React.FC<SeatingCanvasProps> = ({
                         <input
                           type="url"
                           value={driveUrlInput}
-                          onChange={(e) => setDriveUrlInput(e.target.value)}
+                          onChange={(e) => handleDriveUrlInputChange(e.target.value)}
+                          onPaste={(e) => {
+                            const text = e.clipboardData.getData('text');
+                            if (text) {
+                              setTimeout(() => handleDriveUrlInputChange(text), 10);
+                            }
+                          }}
                           placeholder="วางลิงก์ เช่น https://drive.google.com/file/d/.../view"
                           className="w-full pl-3 pr-8 py-2 bg-white border border-slate-300 rounded-xl text-xs font-mono text-slate-800 shadow-2xs focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
                         />
                         {driveUrlInput && (
                           <button
                             type="button"
-                            onClick={() => setDriveUrlInput('')}
+                            onClick={() => handleDriveUrlInputChange('')}
                             className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
                             title="ล้างข้อความ"
                           >
@@ -694,10 +761,11 @@ export const SeatingCanvas: React.FC<SeatingCanvasProps> = ({
                       </div>
                       <button
                         type="submit"
-                        className="px-3.5 py-2 bg-blue-600 hover:bg-blue-700 text-white font-semibold text-xs rounded-xl shadow-2xs transition-colors flex items-center gap-1.5 cursor-pointer shrink-0"
+                        className="px-3.5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-semibold text-xs rounded-xl shadow-2xs transition-colors flex items-center gap-1.5 cursor-pointer shrink-0"
+                        title="ระบบแสดงผลภาพอัตโนมัติทันทีที่พิมพ์หรือวางลิงก์"
                       >
                         <Check className="w-3.5 h-3.5" />
-                        <span>ใช้งานภาพทันที</span>
+                        <span>แสดงผลทันทีอัตโนมัติ</span>
                       </button>
                     </div>
 
@@ -748,6 +816,73 @@ export const SeatingCanvas: React.FC<SeatingCanvasProps> = ({
                           </>
                         )}
                       </button>
+                    </div>
+
+                    {/* GitHub Repository Sync Box */}
+                    <div className="mt-2.5 p-3 bg-indigo-50/90 rounded-xl border border-indigo-200 space-y-2">
+                      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                        <div className="space-y-0.5">
+                          <div className="flex items-center gap-1.5 font-bold text-indigo-950 text-xs">
+                            <span className="w-2 h-2 rounded-full bg-indigo-600"></span>
+                            <span>ค่าเริ่มต้นและการซิงก์ผ่าน GitHub Repository</span>
+                          </div>
+                          <p className="text-[10.5px] text-indigo-800 leading-snug">
+                            ภาพผังถูกตั้งเป็นค่า Default เชื่อมโยงกับ GitHub หากแก้ไขไฟล์ <code className="font-mono bg-indigo-100 px-1 py-0.5 rounded text-indigo-900">public/plan_config.json</code> หรือคอมมิตรูปภาพใหม่บน GitHub หน้าเว็บจะซิงก์อัปเดตให้อัตโนมัติ
+                          </p>
+                        </div>
+                        <div className="flex items-center gap-1.5 shrink-0">
+                          <button
+                            type="button"
+                            onClick={handleManualGitHubSync}
+                            disabled={isSyncingGitHub}
+                            className="px-2.5 py-1.5 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-60 text-white font-semibold text-[11px] rounded-lg shadow-2xs transition-colors flex items-center justify-center gap-1 cursor-pointer"
+                            title="ตรวจสอบและโหลดภาพผังล่าสุดจาก GitHub ทันที"
+                          >
+                            <RefreshCw className={`w-3 h-3 ${isSyncingGitHub ? 'animate-spin' : ''}`} />
+                            <span>{isSyncingGitHub ? 'กำลังซิงก์...' : 'ซิงก์จาก GitHub'}</span>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={handleResetToDefaultImage}
+                            className="px-2.5 py-1.5 bg-white hover:bg-indigo-100/70 text-indigo-700 font-semibold text-[11px] rounded-lg border border-indigo-200 transition-colors flex items-center justify-center gap-1 cursor-pointer"
+                            title="คืนค่าเป็นภาพผังเริ่มต้นจากระบบ"
+                          >
+                            <RotateCcw className="w-3 h-3" />
+                            <span>คืนค่า Default</span>
+                          </button>
+                        </div>
+                      </div>
+
+                      {/* Copy JSON Button */}
+                      <div className="pt-1.5 border-t border-indigo-200/60 flex items-center justify-between">
+                        <span className="text-[10px] text-indigo-700">
+                          ต้องการนำลิงก์ภาพปัจจุบันไปตั้งเป็น Default ใน GitHub?
+                        </span>
+                        <button
+                          type="button"
+                          onClick={handleCopyGitHubConfigJson}
+                          className="px-2 py-1 bg-white hover:bg-indigo-100 text-indigo-700 font-medium text-[10.5px] rounded border border-indigo-200 transition-colors flex items-center gap-1 cursor-pointer"
+                          title="คัดลอกรูปแบบ JSON นำไปวางใน public/plan_config.json บน GitHub"
+                        >
+                          {copiedConfigJson ? (
+                            <>
+                              <Check className="w-3 h-3 text-emerald-600" />
+                              <span className="text-emerald-700 font-semibold">คัดลอก JSON แล้ว!</span>
+                            </>
+                          ) : (
+                            <>
+                              <Copy className="w-3 h-3 text-indigo-600" />
+                              <span>คัดลอก plan_config.json</span>
+                            </>
+                          )}
+                        </button>
+                      </div>
+
+                      {gitHubSyncMsg && (
+                        <p className={`text-[11px] font-medium pt-0.5 ${gitHubSyncMsg.includes('สำเร็จ') ? 'text-emerald-700' : 'text-amber-800'}`}>
+                          {gitHubSyncMsg}
+                        </p>
+                      )}
                     </div>
                   </form>
                 </div>
@@ -953,6 +1088,37 @@ export const SeatingCanvas: React.FC<SeatingCanvasProps> = ({
       )}
 
       {/* ============================================================ */}
+      {/* SEATING PLAN SETTINGS MODAL (Matching requested layout)     */}
+      {/* ============================================================ */}
+      <SeatingPlanModal
+        isOpen={isPlanModalOpen}
+        onClose={handleClosePlanModal}
+        metadata={metadata}
+        onUpdateMetadata={(updated) => {
+          if (onUpdateMetadata) {
+            onUpdateMetadata(updated);
+          }
+          if (updated.bgPlacement) {
+            setBgPlacement(updated.bgPlacement);
+            localStorage.setItem('silpa_bhirasri_plan_bg_placement', updated.bgPlacement);
+          }
+          if (updated.bgDriveUrl !== undefined) {
+            handleDriveUrlInputChange(updated.bgDriveUrl);
+          }
+        }}
+        selectedZone={activeEditZone}
+        onSelectZone={(zone) => setActiveEditZone(zone as EditZone)}
+        bgPlacement={bgPlacement}
+        onChangeBgPlacement={(placement) => {
+          setBgPlacement(placement);
+          localStorage.setItem('silpa_bhirasri_plan_bg_placement', placement);
+        }}
+        driveUrl={driveUrlInput}
+        onChangeDriveUrl={(url) => handleDriveUrlInputChange(url)}
+        onResetDefaultImage={handleResetToDefaultImage}
+      />
+
+      {/* ============================================================ */}
       {/* MAIN SVG SEATING PLAN CANVAS                                 */}
       {/* ============================================================ */}
       <div 
@@ -961,69 +1127,6 @@ export const SeatingCanvas: React.FC<SeatingCanvasProps> = ({
         onDragLeave={() => setIsDragOver(false)}
         onDrop={handleCanvasFileDrop}
       >
-        {/* Quick Image Overlay Notice / Banner (Google Drive Status) */}
-        <div className="w-full max-w-[1150px] mb-2 sm:mb-2.5 px-3 sm:px-4 py-1.5 sm:py-2 bg-white border border-slate-200/90 rounded-xl flex flex-row items-center justify-between gap-2 text-xs shadow-2xs no-print overflow-hidden">
-          <div className="flex items-center gap-2 text-slate-900 min-w-0 flex-1">
-            <span className={`p-1.5 rounded-lg shrink-0 ${bgImage ? 'bg-blue-100 text-blue-700' : 'bg-slate-100 text-slate-500'}`}>
-              {bgImage ? <LinkIcon className="w-3.5 h-3.5" /> : <ImageIcon className="w-3.5 h-3.5" />}
-            </span>
-            <div className="flex items-center gap-1.5 truncate text-[11px] sm:text-xs">
-              <span className="font-bold text-slate-900 shrink-0">ภาพผังพื้นหลัง:</span>
-              <span className="text-slate-700 truncate">
-                {bgImage ? (
-                  <>
-                    <span className="text-blue-700 font-semibold">🔗 ฝังภาพจาก Google Drive / ลิงก์รูปภาพแล้ว</span>
-                    <span className="text-slate-500 ml-1">({bgPlacement === 'stage' ? 'ตำแหน่งลานพิธี' : 'เต็มผัง'})</span>
-                  </>
-                ) : (
-                  <span className="text-slate-500 font-normal">ไม่มีภาพพื้นหลัง (นำภาพเดิมที่มากับระบบออกแล้ว)</span>
-                )}
-              </span>
-              {bgImage && (
-                <span className="hidden lg:inline-block text-slate-400 shrink-0 text-[11px]">
-                  • ความทึบ {Math.round(bgOpacity * 100)}%
-                </span>
-              )}
-            </div>
-          </div>
-
-          <div className="flex items-center gap-1.5 shrink-0">
-            {bgImage && (
-              <button
-                type="button"
-                onClick={handleResetPlacementBounds}
-                className="px-2.5 py-1 text-slate-700 bg-slate-50 hover:bg-slate-100 border border-slate-200 rounded-lg transition-colors text-xs font-medium cursor-pointer whitespace-nowrap hidden md:inline-flex items-center"
-                title="ปรับขนาดและตำแหน่งพอดีลานพิธีการ"
-              >
-                🎯 พอดีลานพิธี
-              </button>
-            )}
-            <button
-              type="button"
-              onClick={() => setIsImageModalOpen(true)}
-              className={`px-3 py-1 font-semibold rounded-lg shadow-2xs transition-colors flex items-center gap-1.5 cursor-pointer whitespace-nowrap text-xs ${
-                bgImage 
-                  ? 'bg-blue-50 text-blue-700 hover:bg-blue-100 border border-blue-200' 
-                  : 'bg-blue-600 hover:bg-blue-700 text-white'
-              }`}
-              title="ตั้งค่าหรือเปลี่ยนลิงก์ Google Drive"
-            >
-              <LinkIcon className="w-3.5 h-3.5 shrink-0" />
-              <span>{bgImage ? '⚙️ จัดการลิงก์ Google Drive' : '🔗 ฝังลิงก์ภาพจาก Google Drive'}</span>
-            </button>
-            {bgImage && (
-              <button
-                type="button"
-                onClick={handleRemoveBgImage}
-                className="px-2 py-1 text-slate-500 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-colors text-xs whitespace-nowrap cursor-pointer"
-                title="นำภาพออก (ให้พื้นหลังว่าง)"
-              >
-                นำภาพออก
-              </button>
-            )}
-          </div>
-        </div>
-
         {/* Drag Over Overlay Alert */}
         {isDragOver && (
           <div className="w-full max-w-[1150px] mb-3 p-6 border-2 border-dashed border-blue-500 bg-blue-50/90 rounded-2xl text-center text-blue-900 font-bold flex flex-col items-center justify-center animate-pulse">
@@ -1041,17 +1144,28 @@ export const SeatingCanvas: React.FC<SeatingCanvasProps> = ({
             viewBox="0 0 1150 780"
             className="w-full h-auto max-w-[1150px] select-none block"
             xmlns="http://www.w3.org/2000/svg"
-            onPointerDown={isDrawingMode ? drawingTools.handlePointerDown : undefined}
-            onPointerMove={isDrawingMode ? drawingTools.handlePointerMove : undefined}
-            onPointerUp={isDrawingMode ? drawingTools.handlePointerUp : undefined}
           >
             {/* Base Background */}
             <rect x="0" y="0" width="1150" height="780" fill="#ffffff" />
             <rect x="4" y="4" width="1142" height="772" rx="8" fill="none" stroke="#e2e8f0" strokeWidth="1" />
 
-            {/* Header Title */}
-            <text x="40" y="38" fontSize="13" fontWeight="600" fill="#475569" fontFamily="sans-serif">
-              {metadata.eventTitle || 'แผนผังที่นั่งสำหรับแขกผู้มีเกียรติงานวันศิลป์ พีระศรี ในพิธีการ'} ({metadata.year || 'ประจำปี พ.ศ. 2569'})
+            {/* Header Title (Clickable to edit year in modal) */}
+            <text 
+              x="40" 
+              y="38" 
+              fontSize="13" 
+              fontWeight="600" 
+              fill="#475569" 
+              fontFamily="sans-serif"
+              className="cursor-pointer hover:fill-blue-600 transition-colors"
+              onClick={handleOpenPlanModal}
+              title="คลิกเพื่อตั้งค่าผังและแก้ไขปี พ.ศ."
+            >
+              {metadata.eventTitle || 'แผนผังที่นั่งสำหรับแขกผู้มีเกียรติงานวันศิลป์ พีระศรี ในพิธีการ'} ({
+                metadata.year?.startsWith('ประจำปี') 
+                  ? metadata.year 
+                  : (metadata.year ? `ประจำปี พ.ศ. ${metadata.year}` : 'ประจำปี พ.ศ. 2569')
+              })
             </text>
             <text x="40" y="66" fontSize="20" fontWeight="bold" fill="#0f172a" fontFamily="sans-serif">
               ผังรวมการจัดที่นั่งและเส้นทางพิธีการ (วันศิลป์ พีระศรี) — 103 ที่นั่ง
@@ -1062,11 +1176,12 @@ export const SeatingCanvas: React.FC<SeatingCanvasProps> = ({
 
             {/* ============================================================ */}
             {/* 1. EMBEDDED SEATING PLAN IMAGE (FROM GOOGLE DRIVE LINK / URL) */}
+            {/* Always displayed according to link                            */}
             {/* ============================================================ */}
-            {bgImage && showBgImage ? (
+            {effectiveBgImage && (
               <image
                 id="embedded-seating-plan-img"
-                href={bgImage}
+                href={effectiveBgImage}
                 x={bgPlacement === 'full' ? 0 : bgX}
                 y={bgPlacement === 'full' ? 0 : bgY}
                 width={bgPlacement === 'full' ? 1150 : Math.min(bgWidth, 1150 - bgX)}
@@ -1075,65 +1190,6 @@ export const SeatingCanvas: React.FC<SeatingCanvasProps> = ({
                 opacity={bgOpacity}
                 style={{ pointerEvents: 'none' }}
                 className="pointer-events-none select-none"
-              />
-            ) : (
-              /* Clean Central Courtyard Guideline (when no image is set, original system image removed) */
-              <g id="empty-courtyard-placeholder" opacity="0.7">
-                <rect
-                  x="38"
-                  y="104"
-                  width="826"
-                  height="450"
-                  rx="10"
-                  fill="#f8fafc"
-                  stroke="#cbd5e1"
-                  strokeWidth="1.5"
-                  strokeDasharray="6 6"
-                />
-                <text
-                  x="451"
-                  y="315"
-                  textAnchor="middle"
-                  fill="#64748b"
-                  fontSize="15"
-                  fontWeight="bold"
-                  fontFamily="sans-serif"
-                >
-                  🏛️ ลานอนุสาวรีย์ศาสตราจารย์ศิลป์ พีระศรี
-                </text>
-                <text
-                  x="451"
-                  y="342"
-                  textAnchor="middle"
-                  fill="#94a3b8"
-                  fontSize="12"
-                  fontFamily="sans-serif"
-                >
-                  (นำภาพเดิมที่มากับระบบออกแล้ว — กดปุ่ม "ฝังลิงก์ภาพจาก Google Drive" ด้านบนเพื่อแสดงผังที่ต้องการ)
-                </text>
-              </g>
-            )}
-
-            {/* Custom User Hand-Drawn Paths */}
-            {drawingTools.customPaths.map(p => (
-              <path
-                key={p.id}
-                d={p.d}
-                fill="none"
-                stroke={p.color}
-                strokeWidth={p.strokeWidth}
-                strokeLinecap="round"
-                strokeLinejoin="round"
-              />
-            ))}
-            {drawingTools.activeCustomPath && (
-              <path
-                d={drawingTools.activeCustomPath}
-                fill="none"
-                stroke="#f59e0b"
-                strokeWidth="3.5"
-                strokeLinecap="round"
-                strokeLinejoin="round"
               />
             )}
 
@@ -1164,31 +1220,31 @@ export const SeatingCanvas: React.FC<SeatingCanvasProps> = ({
               {/* Row A */}
               <rect x="80" y="588" width="560" height="30" rx="5" fill="#f4c2c7" stroke="#e09ea5" strokeWidth="1" className="transition-all group-hover:brightness-95" />
               <text x="360" y="608" textAnchor="middle" fontSize="13" fontWeight="bold" fill="#000000" fontFamily="sans-serif">
-                แถวที่นั่ง A1 - A12
+                แถวที่นั่ง A1 - A{rowA.length || 12}
               </text>
 
               {/* Row B */}
               <rect x="80" y="623" width="560" height="30" rx="5" fill="#f4c2c7" stroke="#e09ea5" strokeWidth="1" className="transition-all group-hover:brightness-95" />
               <text x="360" y="643" textAnchor="middle" fontSize="13" fontWeight="bold" fill="#000000" fontFamily="sans-serif">
-                แถวที่นั่ง B1 - B12
+                แถวที่นั่ง B1 - B{rowB.length || 12}
               </text>
 
               {/* Row C */}
               <rect x="80" y="658" width="560" height="30" rx="5" fill="#f4c2c7" stroke="#e09ea5" strokeWidth="1" className="transition-all group-hover:brightness-95" />
               <text x="360" y="678" textAnchor="middle" fontSize="13" fontWeight="bold" fill="#000000" fontFamily="sans-serif">
-                แถวที่นั่ง C1 - C12
+                แถวที่นั่ง C1 - C{rowC.length || 12}
               </text>
 
               {/* Row D */}
               <rect x="80" y="693" width="560" height="30" rx="5" fill="#f4c2c7" stroke="#e09ea5" strokeWidth="1" className="transition-all group-hover:brightness-95" />
               <text x="360" y="713" textAnchor="middle" fontSize="13" fontWeight="bold" fill="#000000" fontFamily="sans-serif">
-                แถวที่นั่ง D1 - D12
+                แถวที่นั่ง D1 - D{rowD.length || 12}
               </text>
 
               {/* Row E */}
               <rect x="80" y="728" width="560" height="30" rx="5" fill="#f4c2c7" stroke="#e09ea5" strokeWidth="1" className="transition-all group-hover:brightness-95" />
               <text x="360" y="748" textAnchor="middle" fontSize="13" fontWeight="bold" fill="#000000" fontFamily="sans-serif">
-                แถวที่นั่ง E1 - E12
+                แถวที่นั่ง E1 - E{rowE.length || 12}
               </text>
             </g>
 
@@ -1214,19 +1270,19 @@ export const SeatingCanvas: React.FC<SeatingCanvasProps> = ({
               {/* Row F */}
               <rect x="670" y="588" width="230" height="30" rx="5" fill="#f3e59a" stroke="#dfce7b" strokeWidth="1" className="transition-all group-hover:brightness-95" />
               <text x="785" y="608" textAnchor="middle" fontSize="13" fontWeight="bold" fill="#000000" fontFamily="sans-serif">
-                แถวที่นั่ง F1 - F6
+                แถวที่นั่ง F1 - F{rowF.length || 6}
               </text>
 
               {/* Row G */}
               <rect x="670" y="623" width="230" height="30" rx="5" fill="#f3e59a" stroke="#dfce7b" strokeWidth="1" className="transition-all group-hover:brightness-95" />
               <text x="785" y="643" textAnchor="middle" fontSize="13" fontWeight="bold" fill="#000000" fontFamily="sans-serif">
-                แถวที่นั่ง G1 - G6
+                แถวที่นั่ง G1 - G{rowG.length || 6}
               </text>
 
               {/* Row H */}
               <rect x="670" y="658" width="230" height="30" rx="5" fill="#f3e59a" stroke="#dfce7b" strokeWidth="1" className="transition-all group-hover:brightness-95" />
               <text x="785" y="678" textAnchor="middle" fontSize="13" fontWeight="bold" fill="#000000" fontFamily="sans-serif">
-                แถวที่นั่ง H1 - H6
+                แถวที่นั่ง H1 - H{rowH.length || 6}
               </text>
             </g>
 

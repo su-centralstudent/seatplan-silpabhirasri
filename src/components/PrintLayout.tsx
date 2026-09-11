@@ -62,6 +62,17 @@ export const PrintLayout: React.FC<PrintLayoutProps> = ({ planState }) => {
         className="fixed -left-[99999px] -top-[99999px] w-[1150px] opacity-0 pointer-events-none no-print"
         aria-hidden="true"
       >
+        <div id="pdf-offscreen-canvas-wrapper">
+          <SeatingCanvas
+            metadata={planState.metadata}
+            seats={planState.seats}
+            selectedSeat={null}
+            highlightFilter=""
+            onSelectSeat={() => {}}
+            onSwapSeats={() => {}}
+            isPrintMode={true}
+          />
+        </div>
         <ZonePinkSvg metadata={planState.metadata} seats={planState.seats} />
         <ZoneYellowSvg metadata={planState.metadata} seats={planState.seats} />
         <ZoneRightGreenSvg metadata={planState.metadata} seats={planState.seats} />

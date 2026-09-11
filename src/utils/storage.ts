@@ -12,6 +12,9 @@ export function loadSeatingPlan(): SeatingPlanState {
         if (!parsed.unassignedGuests) {
           parsed.unassignedGuests = initialPlanState.unassignedGuests;
         }
+        if (!parsed.metadata.bgImageUrl) {
+          parsed.metadata.bgImageUrl = initialPlanState.metadata.bgImageUrl;
+        }
         return parsed;
       }
     }
@@ -32,6 +35,9 @@ export function saveSeatingPlan(state: SeatingPlanState): void {
 export function resetToDefaultPlan(): SeatingPlanState {
   try {
     localStorage.removeItem(STORAGE_KEY);
+    localStorage.removeItem('silpa_bhirasri_plan_bg_image');
+    localStorage.removeItem('silpa_bhirasri_plan_drive_url');
+    localStorage.removeItem('silpa_bhirasri_plan_bg_drive_url');
   } catch {
     // ignore
   }
@@ -50,7 +56,7 @@ export function exportToJsonFile(state: SeatingPlanState): void {
 }
 
 export function exportToCsv(seats: Record<string, Seat>): void {
-  const headers = ['Seat ID', 'Row', 'Number', 'Position / Title', 'Guest Name', 'Organization', 'Set Group', 'Flower Basket (*)', 'Category', 'Status', 'Notes', 'Check-in Time'];
+  const headers = ['Seat ID', 'Row', 'Number', 'Position / Title', 'Guest Name', 'Organization', 'Set Group', 'Flower Basket (*)', 'Art Set', 'Seat Color', 'Category', 'Status', 'Notes', 'Check-in Time'];
   
   const rows = Object.values(seats).map(s => [
     `"${s.id}"`,
@@ -61,6 +67,8 @@ export function exportToCsv(seats: Record<string, Seat>): void {
     `"${(s.organization || '').replace(/"/g, '""')}"`,
     `"${(s.setGroup || '').replace(/"/g, '""')}"`,
     s.hasFlowerBasket ? 'YES' : 'NO',
+    s.hasArtSet ? 'YES' : 'NO',
+    `"${(s.colorBg || 'Default White').replace(/"/g, '""')}"`,
     `"${s.category}"`,
     `"${s.status}"`,
     `"${(s.notes || '').replace(/"/g, '""')}"`,
