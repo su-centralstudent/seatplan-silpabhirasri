@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { SeatingPlanState, Seat, UnassignedGuest, SeatingPlanMetadata } from './types';
 import { 
@@ -29,7 +29,10 @@ import {
   getSavedDriveImageUrl, 
   setSavedDriveImageUrl, 
   convertGoogleDriveUrl, 
-  isAutoSyncEnabled 
+  isAutoSyncEnabled,
+  getAutoSyncInterval,
+  getLastSyncTime,
+  setLastSyncTime
 } from './data/googleSheetConfig';
 import { getAccessToken } from './utils/googleAuth';
 import { 
@@ -52,11 +55,41 @@ export default function App() {
   const [isGoogleSheetModalOpen, setIsGoogleSheetModalOpen] = useState<boolean>(false);
   const [isSeatingPlanModalOpen, setIsSeatingPlanModalOpen] = useState<boolean>(false);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
+  const [isAutoSyncing, setIsAutoSyncing] = useState<boolean>(false);
+  const [lastAutoSyncTime, setLastAutoSyncTime] = useState<string | null>(() => getLastSyncTime());
+  const isSyncingRef = useRef<boolean>(false);
 
   // Auto-save to localStorage on change
   useEffect(() => {
     saveSeatingPlan(planState);
   }, [planState]);
+
+  // One-time state normalization for row K / J awardee labels to remove any "K" or "J" prefix
+  useEffect(() => {
+    let needsUpdate = false;
+    const updatedSeats = { ...planState.seats };
+    (Object.values(updatedSeats) as Seat[]).forEach((seat) => {
+      if (seat.row === 'K' && typeof seat.label === 'string' && /^K\d+$/i.test(seat.label)) {
+        needsUpdate = true;
+        updatedSeats[seat.id] = {
+          ...seat,
+          label: seat.label.replace(/^K/i, ''),
+          setGroup: typeof seat.setGroup === 'string' ? seat.setGroup.replace(/^K/i, '') : seat.setGroup,
+        };
+      }
+      if (seat.row === 'J' && typeof seat.label === 'string' && /^J\d+$/i.test(seat.label)) {
+        needsUpdate = true;
+        updatedSeats[seat.id] = {
+          ...seat,
+          label: seat.label.replace(/^J/i, ''),
+          setGroup: typeof seat.setGroup === 'string' ? seat.setGroup.replace(/^J/i, '') : seat.setGroup,
+        };
+      }
+    });
+    if (needsUpdate) {
+      setPlanState(prev => ({ ...prev, seats: updatedSeats }));
+    }
+  }, []);
 
   // Update metadata helper (e.g. year, title, etc.)
   const handleUpdateMetadata = (updated: Partial<SeatingPlanMetadata>) => {
@@ -140,162 +173,253 @@ export default function App() {
     showToast(summaryMsg);
   };
 
-  // Auto-sync on web load & tab focus (supports GitHub Pages & all browsers)
-  useEffect(() => {
-    // 2. Auto-sync seat data and plan image from Google Sheet
-    const autoSyncFromSheet = async (targetUrl?: string) => {
-      const sheetUrl = targetUrl || getConfiguredSheetUrl();
-      if (!sheetUrl) return;
+  // Auto-sync seat data and plan image from Google Sheet
+  const autoSyncFromSheet = useCallback(async (targetUrl?: string, isManualTrigger?: boolean) => {
+    const sheetUrl = targetUrl || getConfiguredSheetUrl();
+    if (!sheetUrl) {
+      if (isManualTrigger) {
+        showToast('กรุณาระบุลิงก์ Google Sheet ก่อนทำการซิงก์');
+      }
+      return;
+    }
 
-      const isEnabled = isAutoSyncEnabled();
-      if (!isEnabled && !targetUrl) return;
+    const isEnabled = isAutoSyncEnabled();
+    if (!isEnabled && !targetUrl && !isManualTrigger) return;
 
-      try {
-        const token = getAccessToken();
-        const result = await fetchGoogleSheetData(sheetUrl, token);
-        if (result.success && result.rows.length > 0) {
-          setPlanState(prev => {
-            const nextSeats = { ...prev.seats };
-            let hasChanges = false;
-            result.rows.forEach(row => {
-              const seatId = row.seatId;
-              const existing = nextSeats[seatId];
-              if (existing) {
-                if (
-                  (row.guestName !== undefined && row.guestName !== existing.guestName) ||
-                  (row.position !== undefined && row.position !== existing.position) ||
-                  (row.organization !== undefined && row.organization !== existing.organization) ||
-                  (row.setGroup !== undefined && row.setGroup !== existing.setGroup) ||
-                  (row.hasFlowerBasket !== undefined && row.hasFlowerBasket !== existing.hasFlowerBasket) ||
-                  (row.hasArtSet !== undefined && row.hasArtSet !== existing.hasArtSet)
-                ) {
-                  hasChanges = true;
-                  nextSeats[seatId] = {
-                    ...existing,
-                    guestName: row.guestName !== undefined ? row.guestName : existing.guestName,
-                    position: row.position !== undefined ? row.position : existing.position,
-                    organization: row.organization !== undefined ? row.organization : existing.organization,
-                    setGroup: row.setGroup !== undefined ? row.setGroup : existing.setGroup,
-                    hasFlowerBasket: row.hasFlowerBasket !== undefined ? row.hasFlowerBasket : existing.hasFlowerBasket,
-                    hasArtSet: row.hasArtSet !== undefined ? row.hasArtSet : existing.hasArtSet,
-                    category: row.category || existing.category,
-                  };
-                }
+    if (isSyncingRef.current) return;
+    isSyncingRef.current = true;
+    setIsAutoSyncing(true);
+
+    try {
+      const token = getAccessToken();
+      const result = await fetchGoogleSheetData(sheetUrl, token);
+      if (result.success && result.rows.length > 0) {
+        let changedCount = 0;
+        let newSeatCount = 0;
+
+        setPlanState(prev => {
+          const nextSeats = { ...prev.seats };
+          let hasChanges = false;
+
+          result.rows.forEach(row => {
+            const seatId = row.seatId;
+            if (!seatId) return;
+            const existing = nextSeats[seatId];
+            if (existing) {
+              const nameDiff = row.guestName !== undefined && row.guestName !== existing.guestName;
+              const posDiff = row.position !== undefined && row.position !== existing.position;
+              const orgDiff = row.organization !== undefined && row.organization !== existing.organization;
+              const setDiff = row.setGroup !== undefined && row.setGroup !== existing.setGroup;
+              const flowerDiff = row.hasFlowerBasket !== undefined && row.hasFlowerBasket !== existing.hasFlowerBasket;
+              const artDiff = row.hasArtSet !== undefined && row.hasArtSet !== existing.hasArtSet;
+              const catDiff = row.category !== undefined && row.category !== existing.category;
+              const statusDiff = row.status !== undefined && row.status !== existing.status;
+              const notesDiff = row.notes !== undefined && row.notes !== existing.notes;
+              const timeDiff = row.checkInTime !== undefined && row.checkInTime !== existing.checkInTime;
+
+              if (nameDiff || posDiff || orgDiff || setDiff || flowerDiff || artDiff || catDiff || statusDiff || notesDiff || timeDiff) {
+                hasChanges = true;
+                changedCount++;
+                nextSeats[seatId] = {
+                  ...existing,
+                  guestName: row.guestName !== undefined ? row.guestName : existing.guestName,
+                  position: row.position !== undefined ? row.position : existing.position,
+                  organization: row.organization !== undefined ? row.organization : existing.organization,
+                  setGroup: row.setGroup !== undefined ? row.setGroup : existing.setGroup,
+                  hasFlowerBasket: row.hasFlowerBasket !== undefined ? row.hasFlowerBasket : existing.hasFlowerBasket,
+                  hasArtSet: row.hasArtSet !== undefined ? row.hasArtSet : existing.hasArtSet,
+                  category: row.category || existing.category,
+                  status: row.status || existing.status,
+                  notes: row.notes !== undefined ? row.notes : existing.notes,
+                  checkInTime: row.checkInTime !== undefined ? row.checkInTime : existing.checkInTime,
+                };
               }
-            });
-
-            const unassignedList = (result.unassigned || []).map((u, i) => ({
-              id: `UNASSIGNED-${i + 1}`,
-              name: u.guestName || '',
-              position: u.position,
-              organization: u.organization,
-              setGroup: u.setGroup,
-              hasFlowerBasket: u.hasFlowerBasket,
-              hasArtSet: u.hasArtSet,
-              status: u.status || 'confirmed',
-              notes: u.notes,
-            }));
-
-            // Auto-update Plan Image if Google Sheet specified one via #PLAN_IMAGE
-            let nextMetadata = prev.metadata;
-            if (result.planImageUrl) {
-              nextMetadata = {
-                ...prev.metadata,
-                bgImageUrl: result.planImageUrl,
-                ...(result.planDriveUrl ? { bgDriveUrl: result.planDriveUrl } : {}),
+            } else {
+              hasChanges = true;
+              newSeatCount++;
+              const rowLetter = row.row || seatId.charAt(0);
+              const seatNum = row.number || parseInt(seatId.slice(1), 10) || 1;
+              nextSeats[seatId] = {
+                id: seatId,
+                row: rowLetter,
+                number: seatNum,
+                label: seatId,
+                guestName: row.guestName || '',
+                position: row.position || `ที่นั่ง ${seatId}`,
+                organization: row.organization || '',
+                setGroup: row.setGroup || '',
+                hasFlowerBasket: row.hasFlowerBasket || false,
+                hasArtSet: row.hasArtSet || false,
+                category: row.category || 'general',
+                status: row.status || 'confirmed',
+                notes: row.notes || '',
+                checkInTime: row.checkInTime || '',
               };
-              localStorage.setItem('silpa_bhirasri_plan_bg_image', result.planImageUrl);
-              if (result.planDriveUrl) {
-                localStorage.setItem('silpa_bhirasri_plan_drive_url', result.planDriveUrl);
-              }
             }
-
-            if (!hasChanges && unassignedList.length === 0 && !result.planImageUrl) {
-              return prev;
-            }
-
-            return {
-              ...prev,
-              seats: nextSeats,
-              metadata: nextMetadata,
-              ...(unassignedList.length > 0 ? { unassignedGuests: unassignedList } : {}),
-            };
           });
 
-          const nowStr = new Date().toLocaleTimeString('th-TH', { hour: '2-digit', minute: '2-digit' });
-          localStorage.setItem('google_sheet_last_sync_time', nowStr);
-        }
-      } catch (err) {
-        console.warn('Silent auto-sync info:', err);
-      }
-    };
+          const unassignedList = (result.unassigned || []).map((u, i) => ({
+            id: `UNASSIGNED-${i + 1}`,
+            name: u.guestName || '',
+            position: u.position,
+            organization: u.organization,
+            setGroup: u.setGroup,
+            hasFlowerBasket: u.hasFlowerBasket,
+            hasArtSet: u.hasArtSet,
+            status: u.status || 'confirmed',
+            notes: u.notes,
+          }));
 
-    // 1. Sync plan image / config from GitHub repository / server (plan_config.json)
-    const syncGitHubPlanConfig = async () => {
-      try {
-        const ghConfig = await fetchGitHubPlanConfig();
-        if (!ghConfig) return;
-
-        const configChanged = hasGitHubConfigChanged(ghConfig);
-        const hasSavedDrive = typeof window !== 'undefined' && localStorage.getItem('silpa_bhirasri_plan_drive_url');
-
-        // Sync Plan Image & Drive URL
-        if (configChanged || (ghConfig.planDriveUrl && !hasSavedDrive)) {
-          const directUrl = ghConfig.planDriveUrl
-            ? convertGoogleDriveUrl(ghConfig.planDriveUrl)
-            : resolveAssetUrl(ghConfig.planImageUrl);
-
-          if (directUrl) {
-            setPlanState(prev => ({
-              ...prev,
-              metadata: {
-                ...prev.metadata,
-                bgImageUrl: directUrl,
-                ...(ghConfig.planDriveUrl ? { bgDriveUrl: ghConfig.planDriveUrl } : {}),
-              },
-            }));
-            localStorage.setItem('silpa_bhirasri_plan_bg_image', directUrl);
-            if (ghConfig.planDriveUrl) {
-              localStorage.setItem('silpa_bhirasri_plan_drive_url', ghConfig.planDriveUrl);
-              localStorage.setItem('silpa_bhirasri_plan_default_url', ghConfig.planDriveUrl);
+          // Auto-update Plan Image if Google Sheet specified one via #PLAN_IMAGE
+          let nextMetadata = prev.metadata;
+          if (result.planImageUrl) {
+            nextMetadata = {
+              ...prev.metadata,
+              bgImageUrl: result.planImageUrl,
+              ...(result.planDriveUrl ? { bgDriveUrl: result.planDriveUrl } : {}),
+            };
+            localStorage.setItem('silpa_bhirasri_plan_bg_image', result.planImageUrl);
+            if (result.planDriveUrl) {
+              localStorage.setItem('silpa_bhirasri_plan_drive_url', result.planDriveUrl);
             }
           }
-        }
 
-        // Sync Google Sheet URL across all devices
-        if (ghConfig.googleSheetUrl && ghConfig.googleSheetUrl.trim()) {
-          const trimmedSheet = ghConfig.googleSheetUrl.trim();
-          const currentLocalSheet = localStorage.getItem('google_sheet_sync_url') || localStorage.getItem('silpa_bhirasri_github_last_sheet');
-          if (!currentLocalSheet || configChanged) {
-            localStorage.setItem('google_sheet_sync_url', trimmedSheet);
-            localStorage.setItem('silpa_bhirasri_github_last_sheet', trimmedSheet);
-            autoSyncFromSheet(trimmedSheet);
+          if (!hasChanges && unassignedList.length === (prev.unassignedGuests || []).length && !result.planImageUrl) {
+            return prev;
+          }
+
+          return {
+            ...prev,
+            seats: nextSeats,
+            metadata: nextMetadata,
+            ...(unassignedList.length > 0 ? { unassignedGuests: unassignedList } : {}),
+          };
+        });
+
+        const nowStr = new Date().toLocaleTimeString('th-TH', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+        setLastSyncTime(nowStr, result.rows.length);
+        setLastAutoSyncTime(nowStr);
+
+        if (changedCount > 0 || newSeatCount > 0) {
+          showToast(`อัปเดตข้อมูลตาม Google Sheet แล้ว: ปรับปรุง ${changedCount + newSeatCount} รายการ (${nowStr})`);
+        } else if (isManualTrigger) {
+          showToast(`ซิงก์ Google Sheet เรียบร้อย: ข้อมูลเป็นเวอร์ชันล่าสุดแล้ว (${nowStr})`);
+        }
+      } else if (isManualTrigger && !result.success) {
+        showToast(result.message || 'ไม่สามารถซิงก์ข้อมูลจาก Google Sheet ได้');
+      }
+    } catch (err) {
+      console.warn('Silent auto-sync info:', err);
+    } finally {
+      isSyncingRef.current = false;
+      setIsAutoSyncing(false);
+    }
+  }, []);
+
+  // 1. Sync plan image / config from GitHub repository / server (plan_config.json)
+  const syncGitHubPlanConfig = useCallback(async () => {
+    try {
+      const ghConfig = await fetchGitHubPlanConfig();
+      if (!ghConfig) return;
+
+      const configChanged = hasGitHubConfigChanged(ghConfig);
+      const hasSavedDrive = typeof window !== 'undefined' && localStorage.getItem('silpa_bhirasri_plan_drive_url');
+
+      // Sync Plan Image & Drive URL
+      if (configChanged || (ghConfig.planDriveUrl && !hasSavedDrive)) {
+        const directUrl = ghConfig.planDriveUrl
+          ? convertGoogleDriveUrl(ghConfig.planDriveUrl)
+          : resolveAssetUrl(ghConfig.planImageUrl);
+
+        if (directUrl) {
+          setPlanState(prev => ({
+            ...prev,
+            metadata: {
+              ...prev.metadata,
+              bgImageUrl: directUrl,
+              ...(ghConfig.planDriveUrl ? { bgDriveUrl: ghConfig.planDriveUrl } : {}),
+            },
+          }));
+          localStorage.setItem('silpa_bhirasri_plan_bg_image', directUrl);
+          if (ghConfig.planDriveUrl) {
+            localStorage.setItem('silpa_bhirasri_plan_drive_url', ghConfig.planDriveUrl);
+            localStorage.setItem('silpa_bhirasri_plan_default_url', ghConfig.planDriveUrl);
           }
         }
+      }
 
-        markGitHubConfigApplied(ghConfig);
-      } catch (err) {
-        console.warn('Silent GitHub plan config check:', err);
+      // Sync Google Sheet URL across all devices
+      if (ghConfig.googleSheetUrl && ghConfig.googleSheetUrl.trim()) {
+        const trimmedSheet = ghConfig.googleSheetUrl.trim();
+        const currentLocalSheet = localStorage.getItem('google_sheet_sync_url') || localStorage.getItem('silpa_bhirasri_github_last_sheet');
+        if (!currentLocalSheet || configChanged) {
+          localStorage.setItem('google_sheet_sync_url', trimmedSheet);
+          localStorage.setItem('silpa_bhirasri_github_last_sheet', trimmedSheet);
+          autoSyncFromSheet(trimmedSheet);
+        }
+      }
+
+      markGitHubConfigApplied(ghConfig);
+    } catch (err) {
+      console.warn('Silent GitHub plan config check:', err);
+    }
+  }, [autoSyncFromSheet]);
+
+  // Periodic and reactive Google Sheet background auto-sync lifecycle
+  useEffect(() => {
+    let intervalId: any = null;
+
+    const setupInterval = () => {
+      if (intervalId) {
+        clearInterval(intervalId);
+        intervalId = null;
+      }
+      if (isAutoSyncEnabled()) {
+        const intervalSec = getAutoSyncInterval();
+        intervalId = setInterval(() => {
+          autoSyncFromSheet();
+        }, Math.max(10, intervalSec) * 1000);
       }
     };
 
-    // Run on startup
+    // 1. Run on initial page load
     const timer1 = setTimeout(syncGitHubPlanConfig, 300);
-    const timer2 = setTimeout(autoSyncFromSheet, 600);
+    const timer2 = setTimeout(() => autoSyncFromSheet(), 700);
 
-    // Run when user switches back to browser tab
-    const handleWindowFocus = () => {
-      syncGitHubPlanConfig();
+    // 2. Setup periodic background timer
+    setupInterval();
+
+    // 3. React to settings changes (toggle switch or interval change)
+    const handleConfigChange = () => {
+      setupInterval();
       autoSyncFromSheet();
     };
-    window.addEventListener('focus', handleWindowFocus);
+    window.addEventListener('google_sheet_autosync_changed', handleConfigChange);
+
+    // 4. Run when user switches back to browser tab or window gains focus
+    let lastFocusTime = Date.now();
+    const handleFocusOrVisibility = () => {
+      if (document.visibilityState === 'visible') {
+        const now = Date.now();
+        if (now - lastFocusTime > 8000) {
+          lastFocusTime = now;
+          syncGitHubPlanConfig();
+          autoSyncFromSheet();
+        }
+      }
+    };
+    window.addEventListener('focus', handleFocusOrVisibility);
+    document.addEventListener('visibilitychange', handleFocusOrVisibility);
 
     return () => {
       clearTimeout(timer1);
       clearTimeout(timer2);
-      window.removeEventListener('focus', handleWindowFocus);
+      if (intervalId) clearInterval(intervalId);
+      window.removeEventListener('google_sheet_autosync_changed', handleConfigChange);
+      window.removeEventListener('focus', handleFocusOrVisibility);
+      document.removeEventListener('visibilitychange', handleFocusOrVisibility);
     };
-  }, []);
+  }, [autoSyncFromSheet, syncGitHubPlanConfig]);
 
   // Assign an unassigned guest to an empty/target seat
   const handleAssignGuestToSeat = (guest: UnassignedGuest, seatId: string) => {
@@ -456,11 +580,11 @@ export default function App() {
         id: newSeatId,
         row: rowName,
         number: newNum,
-        label: newSeatId,
-        position: `ที่นั่งเพิ่มเติม ${newSeatId}`,
+        label: ['J', 'K'].includes(rowName) ? String(newNum) : newSeatId,
+        position: ['J', 'K'].includes(rowName) ? `ผู้เข้ารับรางวัล ลำดับ ${newNum}` : `ที่นั่งเพิ่มเติม ${newSeatId}`,
         guestName: '',
         organization: '',
-        setGroup: '',
+        setGroup: ['J', 'K'].includes(rowName) ? String(newNum) : '',
         status: 'empty',
         category: defaultCat,
       };
@@ -618,6 +742,9 @@ export default function App() {
           setIsSeatingPlanModalOpen(true);
         }}
         onResetDefault={handleResetDefault}
+        isAutoSyncing={isAutoSyncing}
+        lastAutoSyncTime={lastAutoSyncTime}
+        onTriggerAutoSync={() => autoSyncFromSheet(undefined, true)}
       />
 
       {/* Main App Container */}

@@ -86,14 +86,18 @@ export const SeatCard: React.FC<SeatCardProps> = ({
       `}
       title={`${seat.id} : ${seat.position || ''} ${seat.guestName || ''} (${seat.setGroup || 'ไม่มี Set'}${seat.hasArtSet ? ' | มี Art Set' : ''}${seat.hasFlowerBasket ? ' | วางกระเช้า' : ''})`}
     >
-      {/* Top Header Bar: Seat ID (compact) & Badges */}
-      <div className="w-full flex items-center justify-between leading-none mb-1 px-0.5">
-        <span className={`font-mono text-[8px] sm:text-[8.5px] font-semibold tracking-tight px-1 py-0.2 rounded border shrink-0 ${
-          isDarkBg 
-            ? 'bg-white/20 text-white border-white/30' 
-            : 'text-slate-500 bg-slate-100/90 border-slate-200/50'
-        }`}>
-          {seat.label || seat.id}
+      {/* Top Header Bar: Small Seat Number & Badges */}
+      <div className="w-full flex items-center justify-between leading-none mb-1 px-0.5 min-h-[14px]">
+        {/* Small Seat Number Label (กำกับเลขลำดับที่นั่งแบบเล็กๆ ทุกโซน) */}
+        <span
+          className={`text-[8px] sm:text-[8.5px] font-bold font-mono tracking-tight px-1 py-0.5 rounded leading-none select-none shrink-0 ${
+            isDarkBg
+              ? 'bg-white/20 text-white/95 border border-white/30'
+              : 'bg-black/5 text-slate-700 border border-slate-200/80 shadow-2xs'
+          }`}
+          title={`ที่นั่ง ${seat.id}`}
+        >
+          {seat.id}
         </span>
 
         <div className="flex items-center gap-0.5 shrink-0">
@@ -143,7 +147,9 @@ export const SeatCard: React.FC<SeatCardProps> = ({
           </span>
         ) : isAwardeeNumber ? (
           <div className="flex flex-col items-center justify-center w-full">
-            <span className={`text-xs font-bold leading-tight ${isDarkBg ? 'text-amber-300' : 'text-amber-900'}`}>{seat.label}</span>
+            <span className={`text-xs font-bold leading-tight ${isDarkBg ? 'text-amber-300' : 'text-amber-900'}`}>
+              {typeof seat.label === 'string' ? seat.label.replace(/^[JK]/i, '') : seat.label}
+            </span>
             {seat.guestName && (
               <p className={`text-[9px] sm:text-[9.5px] font-bold leading-snug [overflow-wrap:anywhere] text-center w-full mt-0.5 ${
                 isDarkBg ? 'text-white' : 'text-slate-900'
@@ -207,7 +213,7 @@ export const SeatCard: React.FC<SeatCardProps> = ({
               ? (isDarkBg ? 'text-rose-200 bg-rose-900/40 border border-rose-400/40' : 'text-rose-700 bg-rose-50 border border-rose-200')
               : (isDarkBg ? 'bg-white/20 text-white' : 'bg-black/5 text-current')}
           `}>
-            {seat.setGroup}
+            {['J', 'K'].includes(seat.row) && typeof seat.setGroup === 'string' ? seat.setGroup.replace(/^[JK]/i, '') : seat.setGroup}
           </span>
         </div>
       )}

@@ -25,7 +25,16 @@ import {
   getAccessToken 
 } from '../utils/googleAuth';
 import { savePlanConfigToServer } from '../data/planConfig';
-import { getConfiguredSheetUrl, generateShareableUrl, DEFAULT_GOOGLE_SHEET_URL } from '../data/googleSheetConfig';
+import { 
+  getConfiguredSheetUrl, 
+  generateShareableUrl, 
+  DEFAULT_GOOGLE_SHEET_URL,
+  isAutoSyncEnabled as checkAutoSyncEnabled,
+  setAutoSyncEnabled as saveAutoSyncEnabled,
+  getAutoSyncInterval,
+  setAutoSyncInterval,
+  getLastSyncTime
+} from '../data/googleSheetConfig';
 
 interface GoogleSheetSyncModalProps {
   isOpen: boolean;
@@ -62,15 +71,14 @@ export const GoogleSheetSyncModal: React.FC<GoogleSheetSyncModalProps> = ({
   const [detectedPlanImageUrl, setDetectedPlanImageUrl] = useState<string | null>(null);
   const [isSavingDriveUrl, setIsSavingDriveUrl] = useState<boolean>(false);
   const [saveDriveUrlMsg, setSaveDriveUrlMsg] = useState<string | null>(null);
-  const [autoSyncEnabled, setAutoSyncEnabled] = useState<boolean>(() => {
-    return localStorage.getItem('google_sheet_auto_sync') !== 'false';
-  });
+  const [autoSyncEnabled, setAutoSyncEnabled] = useState<boolean>(() => checkAutoSyncEnabled());
+  const [autoSyncInterval, setAutoSyncIntervalState] = useState<number>(() => getAutoSyncInterval());
   const [parsedUnassigned, setParsedUnassigned] = useState<UnassignedGuest[]>([]);
   const [syncMode, setSyncMode] = useState<'keep_status' | 'overwrite_all'>('keep_status');
   const [allowNewSeats, setAllowNewSeats] = useState<boolean>(true);
   const [isCopiedTemplate, setIsCopiedTemplate] = useState<boolean>(false);
   const [showInstructions, setShowInstructions] = useState<boolean>(false);
-  const [lastSyncTime, setLastSyncTime] = useState<string | null>(null);
+  const [lastSyncTime, setLastSyncTime] = useState<string | null>(() => getLastSyncTime());
   const [isSavedAsDefault, setIsSavedAsDefault] = useState<boolean>(false);
   const [isCopiedShareLink, setIsCopiedShareLink] = useState<boolean>(false);
 
@@ -971,28 +979,65 @@ export const GoogleSheetSyncModal: React.FC<GoogleSheetSyncModalProps> = ({
             </div>
           )}
 
-          {/* Auto-sync on page load setting */}
-          <div className="px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl flex items-center justify-between text-xs">
-            <div className="flex items-center gap-2">
-              <RefreshCw className="w-3.5 h-3.5 text-emerald-600" />
-              <span className="font-semibold text-slate-800">
-                ซิงก์ข้อมูลจาก Google Sheets อัตโนมัติ (Auto-Sync)
-              </span>
+          {/* Auto-sync configuration setting */}
+          <div className="p-3.5 bg-emerald-50/60 border border-emerald-200/90 rounded-xl space-y-2.5 text-xs">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <RefreshCw className={`w-4 h-4 text-emerald-600 ${autoSyncEnabled ? 'animate-spin-slow' : ''}`} />
+                <div>
+                  <span className="font-bold text-emerald-950 block">
+                    อัปเดตข้อมูลตาม Google Sheet อัตโนมัติ (Live Auto-Sync)
+                  </span>
+                  <span className="text-[11px] text-emerald-800/80 block">
+                    ระบบจะดึงข้อมูลใหม่ล่าสุดจาก Google Sheet มาอัปเดตผังที่นั่งอัตโนมัติอย่างต่อเนื่อง
+                  </span>
+                </div>
+              </div>
+              <label className="flex items-center gap-2 cursor-pointer shrink-0">
+                <input
+                  type="checkbox"
+                  checked={autoSyncEnabled}
+                  onChange={(e) => {
+                    const val = e.target.checked;
+                    setAutoSyncEnabled(val);
+                    saveAutoSyncEnabled(val);
+                  }}
+                  className="w-4 h-4 rounded text-emerald-600 focus:ring-emerald-500 cursor-pointer"
+                />
+                <span className="text-emerald-950 font-medium text-xs">
+                  {autoSyncEnabled ? 'เปิดใช้งาน' : 'ปิด'}
+                </span>
+              </label>
             </div>
-            <label className="flex items-center gap-2 cursor-pointer">
-              <input
-                type="checkbox"
-                checked={autoSyncEnabled}
-                onChange={(e) => {
-                  setAutoSyncEnabled(e.target.checked);
-                  localStorage.setItem('google_sheet_auto_sync', e.target.checked ? 'true' : 'false');
-                }}
-                className="rounded text-emerald-600 focus:ring-emerald-500 cursor-pointer"
-              />
-              <span className="text-slate-600 text-xs">
-                {autoSyncEnabled ? 'เปิดอยู่ (ซิงก์เมื่อเปิดเว็บ/สลับแท็บ)' : 'ปิดการซิงก์อัตโนมัติ'}
-              </span>
-            </label>
+
+            {autoSyncEnabled && (
+              <div className="pt-2 border-t border-emerald-200/70 flex flex-wrap items-center justify-between gap-2 text-xs text-emerald-950">
+                <div className="flex items-center gap-2">
+                  <span className="font-medium text-emerald-900">ความถี่ในการอัปเดต:</span>
+                  <select
+                    value={autoSyncInterval}
+                    onChange={(e) => {
+                      const sec = Number(e.target.value);
+                      setAutoSyncIntervalState(sec);
+                      setAutoSyncInterval(sec);
+                    }}
+                    className="bg-white border border-emerald-300 rounded-lg px-2.5 py-1 text-xs font-semibold text-emerald-900 focus:outline-none focus:ring-1 focus:ring-emerald-500 cursor-pointer shadow-2xs"
+                  >
+                    <option value={15}>ทุก 15 วินาที (เร็วที่สุด)</option>
+                    <option value={30}>ทุก 30 วินาที (แนะนำ)</option>
+                    <option value={60}>ทุก 1 นาที</option>
+                    <option value={120}>ทุก 2 นาที</option>
+                    <option value={300}>ทุก 5 นาที</option>
+                  </select>
+                </div>
+
+                {lastSyncTime && (
+                  <span className="text-[11px] text-emerald-700 bg-white px-2 py-0.5 rounded-md border border-emerald-200">
+                    ซิงก์ล่าสุด: <strong>{lastSyncTime}</strong>
+                  </span>
+                )}
+              </div>
+            )}
           </div>
 
           {/* Template Helpers Box */}

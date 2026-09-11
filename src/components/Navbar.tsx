@@ -4,7 +4,8 @@ import { SeatingPlanMetadata } from '../types';
 import { 
   LayoutGrid, List,
   Printer, Download, Upload, RotateCcw,
-  Menu, X, ChevronRight, Check, FileDown, FileSpreadsheet
+  Menu, X, ChevronRight, Check, FileDown, FileSpreadsheet,
+  RefreshCw
 } from 'lucide-react';
 
 export type AppTab = 'canvas' | 'table';
@@ -20,6 +21,9 @@ interface NavbarProps {
   onOpenGoogleSheets?: () => void;
   onOpenSeatingPlanModal?: () => void;
   onResetDefault: () => void;
+  isAutoSyncing?: boolean;
+  lastAutoSyncTime?: string | null;
+  onTriggerAutoSync?: () => void;
 }
 
 export const Navbar: React.FC<NavbarProps> = ({
@@ -33,6 +37,9 @@ export const Navbar: React.FC<NavbarProps> = ({
   onOpenGoogleSheets,
   onOpenSeatingPlanModal,
   onResetDefault,
+  isAutoSyncing = false,
+  lastAutoSyncTime,
+  onTriggerAutoSync,
 }) => {
   const [isMenuOpen, setIsMenuOpen] = useState<boolean>(false);
 
@@ -86,7 +93,7 @@ export const Navbar: React.FC<NavbarProps> = ({
             </div>
 
             {/* Right Header: Side Menu Button */}
-            <div className="flex items-center gap-2 shrink-0">
+            <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
               {/* Smooth Sidemenu Trigger Button */}
               <button
                 type="button"
@@ -247,16 +254,21 @@ export const Navbar: React.FC<NavbarProps> = ({
                         onOpenGoogleSheets();
                       }}
                       className="w-full flex items-center justify-between px-2.5 py-2 rounded-lg text-xs font-medium text-emerald-950 bg-emerald-50/80 hover:bg-emerald-100 border border-emerald-300/80 transition-all cursor-pointer group shadow-2xs"
-                      title="เชื่อมต่อ & ซิงก์ข้อมูลกับ Google Sheets"
+                      title="เชื่อมต่อ & ตั้งค่าซิงก์อัตโนมัติกับ Google Sheets"
                     >
                       <div className="flex items-center gap-2">
                         <div className="w-6 h-6 rounded-md bg-emerald-600 text-white flex items-center justify-center shrink-0 shadow-2xs group-hover:bg-emerald-700 transition-colors">
                           <FileSpreadsheet className="w-3.5 h-3.5" />
                         </div>
-                        <span className="font-semibold text-emerald-950">เชื่อมต่อ Google Sheets</span>
+                        <div className="text-left">
+                          <div className="font-semibold text-emerald-950">เชื่อมต่อ Google Sheets</div>
+                          <div className="text-[10px] text-emerald-700 font-normal">
+                            {isAutoSyncing ? 'กำลังซิงก์ข้อมูล...' : (lastAutoSyncTime ? `อัปเดตอัตโนมัติ (ล่าสุด ${lastAutoSyncTime})` : 'อัปเดตตามชีตอัตโนมัติ')}
+                          </div>
+                        </div>
                       </div>
                       <span className="text-[10px] font-bold px-1.5 py-0.5 bg-white text-emerald-800 rounded border border-emerald-300 shrink-0">
-                        Sync
+                        {isAutoSyncing ? 'Syncing' : 'Auto'}
                       </span>
                     </button>
                   )}

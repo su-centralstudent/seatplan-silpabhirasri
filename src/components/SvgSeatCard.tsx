@@ -61,7 +61,7 @@ export const SvgSeatCard: React.FC<SvgSeatCardProps> = ({
   }
 
   // Header pill dimensions (strictly clamped so it never collides with top-right badges)
-  const labelText = seat.label || seat.id;
+  const labelText = seat.id;
   const maxPillWidth = Math.max(22, badgeX - 8);
   const estimatedPillW = labelText.length * 6.5 + 8;
   const pillW = Math.max(22, Math.min(maxPillWidth, estimatedPillW));
@@ -295,7 +295,7 @@ export const SvgSeatCard: React.FC<SvgSeatCardProps> = ({
                   fill={isDark ? '#fde047' : '#78350f'}
                   fontFamily="'Sarabun', 'TH Sarabun New', sans-serif"
                 >
-                  {seat.label}
+                  {typeof seat.label === 'string' ? seat.label.replace(/^[JK]/i, '') : seat.label}
                 </text>
 
                 {/* Guest Name */}
@@ -442,7 +442,7 @@ export const SvgSeatCard: React.FC<SvgSeatCardProps> = ({
                     textLength={shouldClampSet ? maxTextW : undefined}
                     lengthAdjust={shouldClampSet ? 'spacingAndGlyphs' : undefined}
                   >
-                    {seat.setGroup}
+                    {['J', 'K'].includes(seat.row) && typeof seat.setGroup === 'string' ? seat.setGroup.replace(/^[JK]/i, '') : seat.setGroup}
                   </text>
                 </>
               );

@@ -18,6 +18,58 @@ export function loadSeatingPlan(): SeatingPlanState {
         if (!parsed.metadata.bgDriveUrl) {
           parsed.metadata.bgDriveUrl = initialPlanState.metadata.bgDriveUrl;
         }
+        // Ensure row K seats exist and are numbered 1-10 independently from row J (remove any 'K' prefix from label/number)
+        for (let i = 1; i <= 10; i++) {
+          const seatId = `K${i}`;
+          if (!parsed.seats[seatId] && initialPlanState.seats[seatId]) {
+            parsed.seats[seatId] = initialPlanState.seats[seatId];
+          } else if (parsed.seats[seatId]) {
+            const currentLabel = String(parsed.seats[seatId].label || '');
+            const oldCumulativeNum = String(i + 8);
+            if (
+              currentLabel === oldCumulativeNum ||
+              currentLabel === `K${i}` ||
+              currentLabel === `K${oldCumulativeNum}` ||
+              currentLabel === seatId ||
+              /^K\d+$/i.test(currentLabel)
+            ) {
+              parsed.seats[seatId].label = String(i);
+              if (
+                parsed.seats[seatId].setGroup === oldCumulativeNum ||
+                parsed.seats[seatId].setGroup === `K${i}` ||
+                parsed.seats[seatId].setGroup === `K${oldCumulativeNum}` ||
+                parsed.seats[seatId].setGroup === seatId
+              ) {
+                parsed.seats[seatId].setGroup = String(i);
+              }
+              if (
+                parsed.seats[seatId].position === `ผู้เข้ารับรางวัล ลำดับ ${oldCumulativeNum}` ||
+                parsed.seats[seatId].position === `ผู้เข้ารับรางวัล ลำดับ K${i}` ||
+                parsed.seats[seatId].position === `ที่นั่งเพิ่มเติม ${seatId}`
+              ) {
+                parsed.seats[seatId].position = `ผู้เข้ารับรางวัล ลำดับ ${i}`;
+              }
+            }
+          }
+        }
+
+        // Clean up any remaining K or J prefix in label for awardees in rows J & K
+        Object.values(parsed.seats).forEach((seat: any) => {
+          if (seat && typeof seat.label === 'string') {
+            if (seat.row === 'K' && /^K\d+$/i.test(seat.label)) {
+              seat.label = seat.label.replace(/^K/i, '');
+            } else if (seat.row === 'J' && /^J\d+$/i.test(seat.label)) {
+              seat.label = seat.label.replace(/^J/i, '');
+            }
+          }
+          if (seat && typeof seat.setGroup === 'string') {
+            if (seat.row === 'K' && /^K\d+$/i.test(seat.setGroup)) {
+              seat.setGroup = seat.setGroup.replace(/^K/i, '');
+            } else if (seat.row === 'J' && /^J\d+$/i.test(seat.setGroup)) {
+              seat.setGroup = seat.setGroup.replace(/^J/i, '');
+            }
+          }
+        });
         return parsed;
       }
     }

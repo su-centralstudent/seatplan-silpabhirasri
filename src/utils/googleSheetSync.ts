@@ -63,12 +63,13 @@ export function extractSpreadsheetId(url: string): string | null {
 }
 
 /**
- * Builds the direct CSV export URLs for a Google Sheet
+ * Builds the direct CSV export URLs for a Google Sheet with cache-busting
  */
 export function buildGoogleSheetCsvUrls(spreadsheetId: string, gid: string = '0'): string[] {
+  const ts = Date.now();
   return [
-    `https://docs.google.com/spreadsheets/d/${spreadsheetId}/gviz/tq?tqx=out:csv&gid=${gid}`,
-    `https://docs.google.com/spreadsheets/d/${spreadsheetId}/export?format=csv&gid=${gid}`,
+    `https://docs.google.com/spreadsheets/d/${spreadsheetId}/gviz/tq?tqx=out:csv&gid=${gid}&_t=${ts}`,
+    `https://docs.google.com/spreadsheets/d/${spreadsheetId}/export?format=csv&gid=${gid}&_t=${ts}`,
   ];
 }
 
@@ -555,8 +556,11 @@ export async function fetchGoogleSheetData(
     try {
       const response = await fetch(endpoint, {
         method: 'GET',
+        cache: 'no-store',
         headers: {
           'Accept': 'text/csv, text/plain, */*',
+          'Cache-Control': 'no-cache, no-store, must-revalidate',
+          'Pragma': 'no-cache',
         },
       });
 

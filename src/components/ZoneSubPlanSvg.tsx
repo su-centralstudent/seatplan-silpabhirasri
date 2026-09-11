@@ -19,7 +19,11 @@ function getDynamicRowSeats(
 ): Seat[] {
   const rowSeats = (Object.values(seats) as Seat[]).filter(s => s.row === rowLetter);
   if (rowSeats.length > 0) {
-    return rowSeats.sort((a, b) => descending ? b.number - a.number : a.number - b.number);
+    return rowSeats.sort((a, b) => {
+      const numA = typeof a.number === 'number' && !isNaN(a.number) ? a.number : parseInt(a.id.replace(/\D/g, ''), 10) || 0;
+      const numB = typeof b.number === 'number' && !isNaN(b.number) ? b.number : parseInt(b.id.replace(/\D/g, ''), 10) || 0;
+      return descending ? numB - numA : numA - numB;
+    });
   }
 
   // Fallback generation if row seats aren't initialized yet
@@ -34,7 +38,11 @@ function getDynamicRowSeats(
       category: defaultCategory,
     });
   }
-  return list.sort((a, b) => descending ? b.number - a.number : a.number - b.number);
+  return list.sort((a, b) => {
+    const numA = typeof a.number === 'number' && !isNaN(a.number) ? a.number : parseInt(a.id.replace(/\D/g, ''), 10) || 0;
+    const numB = typeof b.number === 'number' && !isNaN(b.number) ? b.number : parseInt(b.id.replace(/\D/g, ''), 10) || 0;
+    return descending ? numB - numA : numA - numB;
+  });
 }
 
 /**
@@ -342,7 +350,7 @@ export const ZoneRightGreenSvg: React.FC<ZoneSubPlanProps> = ({ metadata, seats 
  */
 export const ZoneRightPeachSvg: React.FC<ZoneSubPlanProps> = ({ metadata, seats }) => {
   const rowJ = getDynamicRowSeats(seats, 'J', false, 8, 'awardee');
-  const rowK = getDynamicRowSeats(seats, 'K', false, 9, 'awardee');
+  const rowK = getDynamicRowSeats(seats, 'K', false, 10, 'awardee');
 
   const totalSeats = rowJ.length + rowK.length;
 
@@ -415,8 +423,10 @@ export const ZoneRightPeachSvg: React.FC<ZoneSubPlanProps> = ({ metadata, seats 
         </text>
 
         {rowK.map((seat, idx) => {
-          const colW = 117;
-          const x = 20 + idx * (colW + 6.5);
+          const count = Math.max(rowK.length, 1);
+          const gap = count >= 10 ? 5 : 6.5;
+          const colW = (1110 - (count - 1) * gap) / count;
+          const x = 20 + idx * (colW + gap);
           return (
             <SvgSeatCard
               key={seat.id}
@@ -425,7 +435,7 @@ export const ZoneRightPeachSvg: React.FC<ZoneSubPlanProps> = ({ metadata, seats 
               y={34}
               width={colW}
               height={220}
-              fontSizeScale={1.0}
+              fontSizeScale={count >= 10 ? 0.92 : 1.0}
             />
           );
         })}

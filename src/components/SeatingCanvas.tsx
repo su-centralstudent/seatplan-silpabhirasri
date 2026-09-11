@@ -452,17 +452,21 @@ export const SeatingCanvas: React.FC<SeatingCanvasProps> = ({
   // Dynamically extract seats for any row
   const getRowSeats = (rowLetter: string, descending: boolean = false): Seat[] => {
     const rowSeats: Seat[] = (Object.values(seats) as Seat[]).filter(s => s.row === rowLetter);
-    return rowSeats.sort((a, b) => descending ? b.number - a.number : a.number - b.number);
+    return rowSeats.sort((a, b) => {
+      const numA = typeof a.number === 'number' && !isNaN(a.number) ? a.number : parseInt(a.id.replace(/\D/g, ''), 10) || 0;
+      const numB = typeof b.number === 'number' && !isNaN(b.number) ? b.number : parseInt(b.id.replace(/\D/g, ''), 10) || 0;
+      return descending ? numB - numA : numA - numB;
+    });
   };
 
-  // Pink Zone: A, B, C, D, E
+  // Pink Zone: A, B, C, D, E (เรียงลำดับเดิม หมายเลขสูงสุด (ซ้าย) ➔ หมายเลข 1 (ขวา))
   const rowA = getRowSeats('A', true);
   const rowB = getRowSeats('B', true);
   const rowC = getRowSeats('C', true);
   const rowD = getRowSeats('D', true);
   const rowE = getRowSeats('E', true);
 
-  // Yellow Zone: F, G, H
+  // Yellow Zone: F, G, H (เรียงลำดับเดิม หมายเลขสูงสุด (ซ้าย) ➔ หมายเลข 1 (ขวา))
   const rowF = getRowSeats('F', true);
   const rowG = getRowSeats('G', true);
   const rowH = getRowSeats('H', true);
@@ -1669,9 +1673,14 @@ export const SeatingCanvas: React.FC<SeatingCanvasProps> = ({
 
               <div>
                 <div className="flex items-center justify-between mb-1">
-                  <span className="text-[11px] font-bold text-orange-800">
-                    แถว K ({colK.length} ที่นั่ง)
-                  </span>
+                  <div className="flex items-center gap-2">
+                    <span className="text-[11px] font-bold text-orange-800">
+                      แถว K ({colK.length} ที่นั่ง)
+                    </span>
+                    <span className="text-[10px] text-slate-500 font-medium">
+                      (เรียงซ้ายไปขวา: ลำดับ 1 ➔ {colK.length})
+                    </span>
+                  </div>
                   <div className="flex items-center gap-1">
                     {onAddSeatToRow && (
                       <button

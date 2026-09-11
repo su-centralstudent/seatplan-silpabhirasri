@@ -182,19 +182,53 @@ export function setSavedDriveImageUrl(url: string): void {
 export function isAutoSyncEnabled(): boolean {
   try {
     const saved = localStorage.getItem(STORAGE_KEYS.AUTO_SYNC_ENABLED);
-    if (saved === null) return true; // Default enabled
-    return saved === 'true';
+    if (saved !== null) return saved === 'true';
+    const legacy = localStorage.getItem('google_sheet_auto_sync');
+    if (legacy !== null) return legacy === 'true';
+    return true; // Default enabled
   } catch {
     return true;
   }
 }
 
 /**
- * Toggles auto-sync on web load
+ * Toggles auto-sync on web load and periodic intervals
  */
 export function setAutoSyncEnabled(enabled: boolean): void {
   try {
     localStorage.setItem(STORAGE_KEYS.AUTO_SYNC_ENABLED, enabled ? 'true' : 'false');
+    localStorage.setItem('google_sheet_auto_sync', enabled ? 'true' : 'false');
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent('google_sheet_autosync_changed'));
+    }
+  } catch {
+    // Ignore
+  }
+}
+
+/**
+ * Gets auto-sync periodic interval in seconds (default: 30s)
+ */
+export function getAutoSyncInterval(): number {
+  try {
+    const saved = localStorage.getItem(STORAGE_KEYS.AUTO_SYNC_INTERVAL);
+    if (!saved) return 30; // Default 30 seconds
+    const num = parseInt(saved, 10);
+    return isNaN(num) || num < 5 ? 30 : num;
+  } catch {
+    return 30;
+  }
+}
+
+/**
+ * Sets auto-sync periodic interval in seconds
+ */
+export function setAutoSyncInterval(seconds: number): void {
+  try {
+    localStorage.setItem(STORAGE_KEYS.AUTO_SYNC_INTERVAL, String(seconds));
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent('google_sheet_autosync_changed'));
+    }
   } catch {
     // Ignore
   }
