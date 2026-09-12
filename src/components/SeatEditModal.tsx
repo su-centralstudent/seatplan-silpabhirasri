@@ -124,7 +124,11 @@ export const SeatEditModal: React.FC<SeatEditModalProps> = ({
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    onSave(formData);
+    const updated = {
+      ...formData,
+      position: formData.position || formData.organization || '',
+    };
+    onSave(updated);
     onClose();
   };
 
@@ -250,9 +254,9 @@ export const SeatEditModal: React.FC<SeatEditModalProps> = ({
                     Description
                   </h5>
                   <p className="text-xs text-slate-600 leading-relaxed">
-                    {formData.position || formData.guestName
-                      ? `${formData.position || 'ยังไม่ระบุตำแหน่ง'} • ${formData.guestName || 'ยังไม่ระบุชื่อ'}`
-                      : 'ยังไม่มีการระบุรายชื่อหรือตำแหน่งในที่นั่งนี้ สามารถกำหนดข้อมูลได้ทางขวามือ'}
+                    {formData.guestName || formData.organization || formData.position
+                      ? `${formData.guestName || 'ยังไม่ระบุชื่อ'}${formData.organization ? ` • ${formData.organization}` : (formData.position ? ` • ${formData.position}` : '')}`
+                      : 'ยังไม่มีการระบุรายชื่อหรือหน่วยงานในที่นั่งนี้ สามารถกำหนดข้อมูลได้ทางขวามือ'}
                   </p>
                 </div>
 
@@ -342,7 +346,7 @@ export const SeatEditModal: React.FC<SeatEditModalProps> = ({
           {/* RIGHT COLUMN: Numbered Step Form (Matching the 1, 2, 3, 4 structure in reference image) */}
           <form onSubmit={handleSubmit} className="md:col-span-8 p-4 sm:p-6 space-y-6 overflow-y-auto">
             
-            {/* Step 1: Position & Guest details */}
+            {/* Step 1: Guest details & Organization */}
             <div className="space-y-3">
               <div className="flex items-center gap-2.5">
                 <span className="w-6 h-6 rounded-md bg-slate-100 text-slate-700 text-xs font-bold flex items-center justify-center shrink-0">
@@ -350,41 +354,12 @@ export const SeatEditModal: React.FC<SeatEditModalProps> = ({
                 </span>
                 <div>
                   <h4 className="text-sm font-semibold text-slate-900 leading-tight">
-                    กำหนดบทบาทและชื่อผู้มีเกียรติ
+                    ชื่อผู้มีเกียรติและหน่วยงาน/สังกัด
                   </h4>
-                  <p className="text-[11px] text-slate-500">
-                    ระบุตำแหน่งทางการในพิธีการและชื่อ-นามสกุลแขก
-                  </p>
                 </div>
               </div>
 
               <div className="space-y-2.5 pt-1">
-                <div>
-                  <label className="block text-xs font-medium text-slate-700 mb-1">
-                    ตำแหน่ง / บทบาทในพิธีการ *
-                  </label>
-                  <input
-                    type="text"
-                    value={formData.position || ''}
-                    onChange={(e) => setFormData({ ...formData, position: e.target.value })}
-                    placeholder="เช่น ประธานในพิธี, ท่านทูต Italy, คณบดีจิตรกรรม"
-                    className="w-full px-3.5 py-2 text-sm rounded-xl border border-slate-200 hover:border-slate-300 focus:border-slate-400 focus:ring-1 focus:ring-slate-400 bg-white transition-colors"
-                  />
-                  {/* Quick Position suggestion pills */}
-                  <div className="flex flex-wrap gap-1 mt-1.5 max-h-16 overflow-y-auto p-1 bg-slate-50 rounded-lg border border-slate-100">
-                    {POSITION_PRESETS.slice(0, 14).map((pos) => (
-                      <button
-                        key={pos}
-                        type="button"
-                        onClick={() => setFormData({ ...formData, position: pos })}
-                        className="px-2 py-0.5 text-[10.5px] bg-white hover:bg-slate-100 text-slate-700 border border-slate-200 rounded-md transition-colors"
-                      >
-                        {pos}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
                   <div>
                     <label className="block text-xs font-medium text-slate-700 mb-1">
@@ -414,7 +389,7 @@ export const SeatEditModal: React.FC<SeatEditModalProps> = ({
               </div>
             </div>
 
-            {/* Step 2: Category & Status */}
+            {/* Step 2: Status */}
             <div className="space-y-3 pt-2 border-t border-slate-100">
               <div className="flex items-center gap-2.5">
                 <span className="w-6 h-6 rounded-md bg-slate-100 text-slate-700 text-xs font-bold flex items-center justify-center shrink-0">
@@ -422,36 +397,12 @@ export const SeatEditModal: React.FC<SeatEditModalProps> = ({
                 </span>
                 <div>
                   <h4 className="text-sm font-semibold text-slate-900 leading-tight">
-                    หมวดหมู่และสถานะการเข้าร่วม
+                    สถานะการตอบรับ
                   </h4>
-                  <p className="text-[11px] text-slate-500">
-                    เลือกหมวดหมู่แขกและสถานะเพื่อการเช็คอิน
-                  </p>
                 </div>
               </div>
 
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 pt-1">
-                <div>
-                  <label className="block text-xs font-medium text-slate-700 mb-1">
-                    หมวดหมู่แขก (Category)
-                  </label>
-                  <select
-                    value={formData.category}
-                    onChange={(e) => setFormData({ ...formData, category: e.target.value as SeatCategory })}
-                    className="w-full px-3.5 py-2 text-sm rounded-xl border border-slate-200 hover:border-slate-300 focus:border-slate-400 focus:ring-1 focus:ring-slate-400 bg-white transition-colors cursor-pointer"
-                  >
-                    <option value="vip_president">VIP ระดับประธาน / ทูต / นายกสภา / อธิการ</option>
-                    <option value="vip_minister">ผู้แทนกระทรวงวัฒนธรรม / กรมศิลป์</option>
-                    <option value="executive">ผู้บริหาร / รองอธิการ / ผู้ช่วยฯ</option>
-                    <option value="dean">คณบดีคณะต่างๆ (Block E)</option>
-                    <option value="director">ผู้อำนวยการสำนัก / สถาบัน</option>
-                    <option value="national_artist">ศิลปินแห่งชาติ</option>
-                    <option value="awardee">ผู้เข้ารับรางวัล / วางกระเช้า (1-18)</option>
-                    <option value="guest_follower">ผู้ติดตาม / ล่าม</option>
-                    <option value="general">ที่นั่งทั่วไป / สำรอง</option>
-                  </select>
-                </div>
-
+              <div className="pt-1">
                 <div>
                   <label className="block text-xs font-medium text-slate-700 mb-1">
                     สถานะการตอบรับ (Status)

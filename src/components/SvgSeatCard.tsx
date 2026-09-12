@@ -23,7 +23,9 @@ export const SvgSeatCard: React.FC<SvgSeatCardProps> = ({
   height,
   fontSizeScale = 1,
 }) => {
-  const isAwardeeNumber = seat.category === 'awardee' && Boolean(seat.label);
+  const isRowJorK = seat.row === 'J' || seat.row === 'K';
+  const displayOrderNumber = seat.label || (isRowJorK ? String(seat.number) : null);
+  const isAwardeeNumber = Boolean(displayOrderNumber && (isRowJorK || seat.category === 'awardee'));
   const isEmpty = seat.status === 'empty' || (!seat.position && !seat.guestName && !seat.label);
 
   const styles = getSeatVisualStyles(seat, '#ffffff');
@@ -72,13 +74,13 @@ export const SvgSeatCard: React.FC<SvgSeatCardProps> = ({
   const baseFs = Math.max(7.5, 9 * fontSizeScale);
   const maxVisualChars = Math.max(7, Math.floor(safeWidth / (baseFs * 0.68)));
 
-  // Wrap text lines safely
-  const nameLines = seat.guestName ? wrapSvgText(seat.guestName, maxVisualChars, 2) : [];
+  // Wrap text lines safely (allow up to 4 lines so full names from Google Sheet are displayed)
+  const nameLines = seat.guestName ? wrapSvgText(seat.guestName, maxVisualChars, 4) : [];
   const posLines = (seat.position && seat.position !== seat.guestName)
-    ? wrapSvgText(seat.position, maxVisualChars + 1, 2)
+    ? wrapSvgText(seat.position, maxVisualChars + 1, 3)
     : [];
   const soloPosLines = (!seat.guestName && seat.position)
-    ? wrapSvgText(seat.position, maxVisualChars + 1, 2)
+    ? wrapSvgText(seat.position, maxVisualChars + 1, 3)
     : [];
   const noteLines = seat.notes ? wrapSvgText(seat.notes, maxVisualChars, 1) : [];
 
@@ -300,7 +302,7 @@ export const SvgSeatCard: React.FC<SvgSeatCardProps> = ({
                   fill={isDark ? '#fde047' : '#78350f'}
                   fontFamily="'Sarabun', 'TH Sarabun New', sans-serif"
                 >
-                  {typeof seat.label === 'string' ? seat.label.replace(/^[JK]/i, '') : seat.label}
+                  {typeof displayOrderNumber === 'string' ? displayOrderNumber.replace(/^[JK]/i, '') : displayOrderNumber}
                 </text>
 
                 {/* Guest Name */}

@@ -23,7 +23,9 @@ export const SeatCard: React.FC<SeatCardProps> = ({
   onDragOver,
   onDrop,
 }) => {
-  const isAwardeeNumber = seat.category === 'awardee' && seat.label;
+  const isRowJorK = seat.row === 'J' || seat.row === 'K';
+  const displayOrderNumber = seat.label || (isRowJorK ? String(seat.number) : null);
+  const isAwardeeNumber = Boolean(displayOrderNumber && (isRowJorK || seat.category === 'awardee'));
   const isEmpty = seat.status === 'empty' || (!seat.position && !seat.guestName && !seat.label);
 
   // Default color for all seats is pure white, unless user explicitly selected a custom color
@@ -80,7 +82,7 @@ export const SeatCard: React.FC<SeatCardProps> = ({
         min-w-[54px] sm:min-w-[60px] md:min-w-[64px] max-w-[70px] min-h-[105px] sm:min-h-[115px] h-auto shadow-xs
         ${baseColorClasses}
         ${isSelected ? 'ring-3 ring-blue-500 ring-offset-2 scale-105 z-20 shadow-md' : ''}
-        ${isHighlighted ? 'ring-3 ring-yellow-400 ring-offset-1 animate-pulse z-10' : ''}
+        ${isHighlighted ? 'ring-3 ring-amber-400 ring-offset-2 animate-pulse z-10 scale-102 shadow-md bg-amber-50/40' : ''}
         ${isDragTarget ? 'ring-2 ring-dashed ring-emerald-500 bg-emerald-50/80 scale-105' : ''}
         hover:shadow-md hover:-translate-y-0.5
       `}
@@ -148,7 +150,7 @@ export const SeatCard: React.FC<SeatCardProps> = ({
         ) : isAwardeeNumber ? (
           <div className="flex flex-col items-center justify-center w-full">
             <span className={`text-xs font-bold leading-tight ${isDarkBg ? 'text-amber-300' : 'text-amber-900'}`}>
-              {typeof seat.label === 'string' ? seat.label.replace(/^[JK]/i, '') : seat.label}
+              {typeof displayOrderNumber === 'string' ? displayOrderNumber.replace(/^[JK]/i, '') : displayOrderNumber}
             </span>
             {seat.guestName && (
               <p className={`text-[9px] sm:text-[9.5px] font-bold leading-snug [overflow-wrap:anywhere] text-center w-full mt-0.5 ${

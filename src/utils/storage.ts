@@ -70,6 +70,32 @@ export function loadSeatingPlan(): SeatingPlanState {
             }
           }
         });
+
+        // Ensure J8 has label: '8'
+        if (parsed.seats['J8']) {
+          parsed.seats['J8'].label = '8';
+        }
+
+        // Migrate any legacy mock names (e.g. J1 = "ดร.สมชาย" or A1 = "กระทรวง อว.")
+        // to authentic Google Sheet data from initialPlanState
+        if (parsed.seats['J1']?.guestName === 'ดร.สมชาย' || parsed.seats['A1']?.guestName === 'กระทรวง อว.') {
+          Object.keys(initialPlanState.seats).forEach(seatId => {
+            const initSeat = initialPlanState.seats[seatId];
+            if (initSeat && initSeat.guestName) {
+              parsed.seats[seatId] = {
+                ...parsed.seats[seatId],
+                guestName: initSeat.guestName,
+                position: initSeat.position,
+                organization: initSeat.organization || parsed.seats[seatId]?.organization,
+                setGroup: initSeat.setGroup !== undefined ? initSeat.setGroup : parsed.seats[seatId]?.setGroup,
+                hasFlowerBasket: initSeat.hasFlowerBasket !== undefined ? initSeat.hasFlowerBasket : parsed.seats[seatId]?.hasFlowerBasket,
+                hasArtSet: initSeat.hasArtSet !== undefined ? initSeat.hasArtSet : parsed.seats[seatId]?.hasArtSet,
+                status: initSeat.status || parsed.seats[seatId]?.status,
+                label: initSeat.label || parsed.seats[seatId]?.label,
+              };
+            }
+          });
+        }
         return parsed;
       }
     }

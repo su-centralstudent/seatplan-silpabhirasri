@@ -86,6 +86,14 @@ export default function App() {
         };
       }
     });
+    // Ensure J8 has numeric label: '8'
+    if (updatedSeats['J8'] && updatedSeats['J8'].label !== '8') {
+      needsUpdate = true;
+      updatedSeats['J8'] = {
+        ...updatedSeats['J8'],
+        label: '8',
+      };
+    }
     if (needsUpdate) {
       setPlanState(prev => ({ ...prev, seats: updatedSeats }));
     }
@@ -144,7 +152,7 @@ export default function App() {
           bgImageUrl: convertGoogleDriveUrl(driveUrl),
         }
       }));
-      showToast('บันทึกลิงก์ Google Drive ลง Google Sheet (#PLAN_IMAGE) สำเร็จแล้ว');
+      showToast(res.message || 'บันทึกลิงก์ Google Drive ลง Tab "ภาพผัง" ใน Google Sheet สำเร็จแล้ว');
     }
     return res;
   };
@@ -257,6 +265,20 @@ export default function App() {
               };
             }
           });
+
+          // Ensure J1-J8 and K1-K10 always have clean sequence number labels (1-8 and 1-10)
+          for (let i = 1; i <= 8; i++) {
+            const jId = `J${i}`;
+            if (nextSeats[jId]) {
+              nextSeats[jId] = { ...nextSeats[jId], label: String(i) };
+            }
+          }
+          for (let i = 1; i <= 10; i++) {
+            const kId = `K${i}`;
+            if (nextSeats[kId]) {
+              nextSeats[kId] = { ...nextSeats[kId], label: String(i) };
+            }
+          }
 
           const unassignedList = (result.unassigned || []).map((u, i) => ({
             id: `UNASSIGNED-${i + 1}`,
@@ -708,8 +730,16 @@ export default function App() {
   };
 
   const handleSavePdf = async () => {
-    showToast('กำลังประมวลผลและสร้างไฟล์ PDF ผังรวมและผังย่อย 5 หน้า (A4 แนวนอน)...');
+    showToast('กำลังตรวจสอบข้อมูลจริงจาก Google Sheet และเตรียมไฟล์ PDF...');
     try {
+      // 1. Sync latest real data from Google Sheet if URL is configured
+      try {
+        await autoSyncFromSheet(undefined, true);
+        await new Promise(resolve => setTimeout(resolve, 300));
+      } catch (syncErr) {
+        console.warn('Could not refresh from Google Sheet before PDF export:', syncErr);
+      }
+
       // Switch to visual canvas tab if not already active to ensure DOM SVG is mounted
       if (activeTab !== 'canvas') {
         setActiveTab('canvas');
@@ -717,7 +747,7 @@ export default function App() {
       }
       const success = await exportSeatingPlanToPdf();
       if (success) {
-        showToast('บันทึกไฟล์ PDF เรียบร้อย (ผังรวม + ผังย่อย 4 โซน 5 หน้า A4)');
+        showToast('บันทึกไฟล์ PDF เรียบร้อย (ผังรวม + ผังย่อย 4 โซน 5 หน้า A4 ข้อมูลตรงตาม Google Sheet)');
       }
     } catch (error) {
       console.error('Save PDF error:', error);
@@ -749,11 +779,24 @@ export default function App() {
 
       {/* Main App Container */}
       <main className="max-w-7xl mx-auto w-full px-2 sm:px-6 py-2.5 sm:py-6 flex-1 flex flex-col gap-3 sm:gap-4 no-print">
-        {/* Quick Stats & Highlight Bar */}
+        {/* Quick Stats & Highlight Bar with Instant Search & Results */}
         <StatsBanner
           seats={planState.seats}
           highlightFilter={highlightFilter}
           onFilterChange={setHighlightFilter}
+          selectedSeat={selectedSeat}
+          onSelectSeat={(seat) => {
+            setSelectedSeat(seat);
+          }}
+          onFocusSeatOnCanvas={(seat) => {
+            setActiveTab('canvas');
+            setTimeout(() => {
+              const el = document.getElementById(`seat-${seat.id}`) || document.getElementById('seating-plan-canvas');
+              if (el) {
+                el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+              }
+            }, 100);
+          }}
         />
 
         {/* Animated Window / Tab Transition */}

@@ -19,6 +19,8 @@ import {
   markGitHubConfigApplied, 
   generatePlanConfigFileContent 
 } from '../data/planConfig';
+import { generatePlanTabTsv } from '../utils/googleSheetSync';
+import { matchSeat } from '../utils/seatSearch';
 
 /**
  * Converts various Google Drive link formats into direct embeddable image URLs:
@@ -108,7 +110,6 @@ export const SeatingCanvas: React.FC<SeatingCanvasProps> = ({
   const handleClosePlanModal = onClosePlanSettingsModal || (() => setInternalPlanModalOpen(false));
 
   const [zoomLevel, setZoomLevel] = useState<number>(1);
-  const [activeFlowRoute, setActiveFlowRoute] = useState<'all' | 'none'>('all');
   const [activeEditZone, setActiveEditZone] = useState<EditZone>('none');
   const [dragTargetSeatId, setDragTargetSeatId] = useState<string | null>(null);
   const [isZoneManagerModalOpen, setIsZoneManagerModalOpen] = useState(false);
@@ -209,6 +210,15 @@ export const SeatingCanvas: React.FC<SeatingCanvasProps> = ({
     navigator.clipboard.writeText(jsonStr);
     setCopiedConfigJson(true);
     setTimeout(() => setCopiedConfigJson(false), 3000);
+  };
+
+  const [copiedPlanTabTsv, setCopiedPlanTabTsv] = useState<boolean>(false);
+
+  const handleCopyPlanTabTsv = () => {
+    const tsv = generatePlanTabTsv(driveUrlInput || metadata.bgDriveUrl || '');
+    navigator.clipboard.writeText(tsv);
+    setCopiedPlanTabTsv(true);
+    setTimeout(() => setCopiedPlanTabTsv(false), 3000);
   };
 
   const [bgOpacity, setBgOpacity] = useState<number>(() => {
@@ -436,17 +446,9 @@ export const SeatingCanvas: React.FC<SeatingCanvasProps> = ({
     }
   };
 
-  // Filter checker
+  // Unified intelligent seat filter checker
   const isSeatHighlighted = (seat: Seat) => {
-    if (!highlightFilter) return false;
-    const query = highlightFilter.toLowerCase().trim();
-    if (seat.id.toLowerCase().includes(query)) return true;
-    if (seat.guestName?.toLowerCase().includes(query)) return true;
-    if (seat.organization?.toLowerCase().includes(query)) return true;
-    if (seat.position?.toLowerCase().includes(query)) return true;
-    if (seat.setGroup?.toLowerCase().includes(query)) return true;
-    if (query === 'flower' && seat.hasFlowerBasket) return true;
-    return false;
+    return matchSeat(seat, highlightFilter);
   };
 
   // Dynamically extract seats for any row
@@ -478,19 +480,28 @@ export const SeatingCanvas: React.FC<SeatingCanvasProps> = ({
   const colJ = getRowSeats('J', false);
   const colK = getRowSeats('K', false);
 
-  // Auto-open zone if search filter matches
+  // Calculate matching seats count per row for visual map highlight
+  const countRowMatches = (rowSeats: Seat[]): number => {
+    if (!highlightFilter || !highlightFilter.trim()) return 0;
+    return rowSeats.filter(s => matchSeat(s, highlightFilter)).length;
+  };
+
+  const matchA = countRowMatches(rowA);
+  const matchB = countRowMatches(rowB);
+  const matchC = countRowMatches(rowC);
+  const matchD = countRowMatches(rowD);
+  const matchE = countRowMatches(rowE);
+  const matchF = countRowMatches(rowF);
+  const matchG = countRowMatches(rowG);
+  const matchH = countRowMatches(rowH);
+  const matchI = countRowMatches(colI);
+  const matchJ = countRowMatches(colJ);
+  const matchK = countRowMatches(colK);
+
+  // Auto-open ALL zones when search filter is active so user sees matched seats across every zone without clicking first!
   useEffect(() => {
-    if (!highlightFilter) return;
-    const query = highlightFilter.toLowerCase().trim();
-    if (query.startsWith('a') || query.startsWith('b') || query.startsWith('c') || query.startsWith('d') || query.startsWith('e')) {
-      setActiveEditZone('pink');
-    } else if (query.startsWith('f') || query.startsWith('g') || query.startsWith('h')) {
-      setActiveEditZone('yellow');
-    } else if (query.startsWith('i')) {
-      setActiveEditZone('green-right');
-    } else if (query.startsWith('j') || query.startsWith('k')) {
-      setActiveEditZone('peach-right');
-    }
+    if (!highlightFilter || !highlightFilter.trim()) return;
+    setActiveEditZone('ALL');
   }, [highlightFilter]);
 
   return (
@@ -502,18 +513,6 @@ export const SeatingCanvas: React.FC<SeatingCanvasProps> = ({
           <div className="px-4 py-2.5 bg-slate-50 border-b border-slate-200 flex flex-wrap items-center justify-between gap-3 text-xs">
             <div className="flex flex-wrap items-center gap-2">
               <span className="font-semibold text-slate-700">การแสดงผล:</span>
-              <button
-                type="button"
-                onClick={() => setActiveFlowRoute(activeFlowRoute === 'all' ? 'none' : 'all')}
-                className={`px-2.5 py-1 rounded-md border font-medium transition-colors ${
-                  activeFlowRoute === 'all'
-                    ? 'bg-slate-900 text-white border-slate-900'
-                    : 'bg-white text-slate-700 border-slate-300 hover:bg-slate-100'
-                }`}
-              >
-                {activeFlowRoute === 'all' ? 'ซ่อนเส้นทางเดิน' : 'แสดงเส้นทางเดิน'}
-              </button>
-
               <button
                 type="button"
                 onClick={() => setIsImageModalOpen(true)}
@@ -790,103 +789,56 @@ export const SeatingCanvas: React.FC<SeatingCanvasProps> = ({
                       รองรับลิงก์ทุกรูปแบบของ Google Drive (ทั้ง /file/d/..., open?id=..., uc?id=...) หรือ Direct Image URL (png, jpg, webp)
                     </p>
 
-                    {/* Google Sheet Sync Box */}
-                    <div className="mt-2.5 p-3 bg-emerald-50/80 rounded-xl border border-emerald-200/80 flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
+                    {/* Google Sheet Dedicated 'ภาพผัง' Tab Sync Box */}
+                    <div className="mt-2.5 p-3 bg-emerald-50/85 rounded-xl border border-emerald-200 flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
                       <div className="space-y-0.5">
-                        <div className="flex items-center gap-1.5 font-bold text-emerald-900 text-xs">
+                        <div className="flex items-center gap-1.5 font-bold text-emerald-950 text-xs">
                           <FileSpreadsheet className="w-3.5 h-3.5 text-emerald-700" />
-                          <span>บันทึกลิงก์ภาพผังลง Google Sheet อัตโนมัติ</span>
+                          <span>บันทึกลิงก์ภาพผังลงใน Tab "ภาพผัง" ใน Google Sheet</span>
                         </div>
                         <p className="text-[10.5px] text-emerald-800 leading-snug">
-                          เมื่อบันทึกแล้ว ทุกคนที่เปิดเว็บผ่าน GitHub หรือเบราว์เซอร์อื่นจะเห็นภาพผังตรงกันเสมอ
+                          ระบบจะสร้าง/อัปเดต Tab <code className="font-mono bg-emerald-100 px-1 py-0.2 rounded font-semibold text-emerald-900">ภาพผัง</code> ใน Google Sheet ไฟล์เดียวกันกับข้อมูลที่นั่ง เพื่อบันทึกลิงก์ภาพผังแยกเป็นสัดส่วนชัดเจน
                         </p>
                       </div>
-                      <button
-                        type="button"
-                        onClick={handleSaveToGoogleSheet}
-                        disabled={isSavingToSheet}
-                        className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-60 text-white font-semibold text-xs rounded-lg shadow-2xs transition-colors flex items-center justify-center gap-1.5 shrink-0 cursor-pointer"
-                        title="บันทึกลิงก์ภาพนี้ลงแถว #PLAN_IMAGE ใน Google Sheet"
-                      >
-                        {isSavingToSheet ? (
-                          <>
-                            <RotateCw className="w-3.5 h-3.5 animate-spin" />
-                            <span>กำลังบันทึก...</span>
-                          </>
-                        ) : (
-                          <>
-                            <FileSpreadsheet className="w-3.5 h-3.5" />
-                            <span>บันทึกลง Google Sheet</span>
-                          </>
-                        )}
-                      </button>
-                    </div>
-
-                    {/* GitHub Repository Sync Box */}
-                    <div className="mt-2.5 p-3 bg-indigo-50/90 rounded-xl border border-indigo-200 space-y-2">
-                      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-                        <div className="space-y-0.5">
-                          <div className="flex items-center gap-1.5 font-bold text-indigo-950 text-xs">
-                            <span className="w-2 h-2 rounded-full bg-indigo-600"></span>
-                            <span>ค่าเริ่มต้นและการซิงก์ผ่าน GitHub Repository</span>
-                          </div>
-                          <p className="text-[10.5px] text-indigo-800 leading-snug">
-                            ภาพผังถูกตั้งเป็นค่า Default เชื่อมโยงกับ GitHub หากแก้ไขไฟล์ <code className="font-mono bg-indigo-100 px-1 py-0.5 rounded text-indigo-900">public/plan_config.json</code> หรือคอมมิตรูปภาพใหม่บน GitHub หน้าเว็บจะซิงก์อัปเดตให้อัตโนมัติ
-                          </p>
-                        </div>
-                        <div className="flex items-center gap-1.5 shrink-0">
-                          <button
-                            type="button"
-                            onClick={handleManualGitHubSync}
-                            disabled={isSyncingGitHub}
-                            className="px-2.5 py-1.5 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-60 text-white font-semibold text-[11px] rounded-lg shadow-2xs transition-colors flex items-center justify-center gap-1 cursor-pointer"
-                            title="ตรวจสอบและโหลดภาพผังล่าสุดจาก GitHub ทันที"
-                          >
-                            <RefreshCw className={`w-3 h-3 ${isSyncingGitHub ? 'animate-spin' : ''}`} />
-                            <span>{isSyncingGitHub ? 'กำลังซิงก์...' : 'ซิงก์จาก GitHub'}</span>
-                          </button>
-                          <button
-                            type="button"
-                            onClick={handleResetToDefaultImage}
-                            className="px-2.5 py-1.5 bg-white hover:bg-indigo-100/70 text-indigo-700 font-semibold text-[11px] rounded-lg border border-indigo-200 transition-colors flex items-center justify-center gap-1 cursor-pointer"
-                            title="คืนค่าเป็นภาพผังเริ่มต้นจากระบบ"
-                          >
-                            <RotateCcw className="w-3 h-3" />
-                            <span>คืนค่า Default</span>
-                          </button>
-                        </div>
-                      </div>
-
-                      {/* Copy JSON Button */}
-                      <div className="pt-1.5 border-t border-indigo-200/60 flex items-center justify-between">
-                        <span className="text-[10px] text-indigo-700">
-                          ต้องการนำลิงก์ภาพปัจจุบันไปตั้งเป็น Default ใน GitHub?
-                        </span>
+                      <div className="flex items-center gap-1.5 shrink-0">
                         <button
                           type="button"
-                          onClick={handleCopyGitHubConfigJson}
-                          className="px-2 py-1 bg-white hover:bg-indigo-100 text-indigo-700 font-medium text-[10.5px] rounded border border-indigo-200 transition-colors flex items-center gap-1 cursor-pointer"
-                          title="คัดลอกรูปแบบ JSON นำไปวางใน public/plan_config.json บน GitHub"
+                          onClick={handleSaveToGoogleSheet}
+                          disabled={isSavingToSheet}
+                          className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-60 text-white font-semibold text-xs rounded-lg shadow-2xs transition-colors flex items-center justify-center gap-1.5 shrink-0 cursor-pointer"
+                          title="บันทึกลิงก์ภาพนี้ลงใน Tab ภาพผัง ของ Google Sheet"
                         >
-                          {copiedConfigJson ? (
+                          {isSavingToSheet ? (
                             <>
-                              <Check className="w-3 h-3 text-emerald-600" />
-                              <span className="text-emerald-700 font-semibold">คัดลอก JSON แล้ว!</span>
+                              <RotateCw className="w-3.5 h-3.5 animate-spin" />
+                              <span>กำลังบันทึก...</span>
                             </>
                           ) : (
                             <>
-                              <Copy className="w-3 h-3 text-indigo-600" />
-                              <span>คัดลอก plan_config.json</span>
+                              <FileSpreadsheet className="w-3.5 h-3.5" />
+                              <span>บันทึกลง Tab "ภาพผัง"</span>
+                            </>
+                          )}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={handleCopyPlanTabTsv}
+                          className="px-2.5 py-1.5 bg-white hover:bg-emerald-100/80 text-emerald-800 font-semibold text-[11px] rounded-lg border border-emerald-300 transition-colors flex items-center justify-center gap-1 cursor-pointer"
+                          title="คัดลอกข้อมูลตารางสำหรับสร้าง Tab 'ภาพผัง' ด้วยตนเองใน Google Sheet"
+                        >
+                          {copiedPlanTabTsv ? (
+                            <>
+                              <Check className="w-3 h-3 text-emerald-600" />
+                              <span>คัดลอกแล้ว!</span>
+                            </>
+                          ) : (
+                            <>
+                              <Copy className="w-3 h-3 text-emerald-700" />
+                              <span>คัดลอกตาราง Tab</span>
                             </>
                           )}
                         </button>
                       </div>
-
-                      {gitHubSyncMsg && (
-                        <p className={`text-[11px] font-medium pt-0.5 ${gitHubSyncMsg.includes('สำเร็จ') ? 'text-emerald-700' : 'text-amber-800'}`}>
-                          {gitHubSyncMsg}
-                        </p>
-                      )}
                     </div>
                   </form>
                 </div>
@@ -1174,9 +1126,6 @@ export const SeatingCanvas: React.FC<SeatingCanvasProps> = ({
             <text x="40" y="66" fontSize="20" fontWeight="bold" fill="#0f172a" fontFamily="sans-serif">
               ผังรวมการจัดที่นั่งและเส้นทางพิธีการ (วันศิลป์ พีระศรี) — 103 ที่นั่ง
             </text>
-            <text x="40" y="90" fontSize="11" fill="#64748b" fontFamily="sans-serif">
-              สถานที่: {metadata.venueName || 'ลานศาสตราจารย์ศิลป์ พีระศรี มหาวิทยาลัยศิลปากร'} | ปรับปรุงล่าสุด: {metadata.lastUpdated || '14/9/2025'}
-            </text>
 
             {/* ============================================================ */}
             {/* 1. EMBEDDED SEATING PLAN IMAGE (FROM GOOGLE DRIVE LINK / URL) */}
@@ -1222,33 +1171,63 @@ export const SeatingCanvas: React.FC<SeatingCanvasProps> = ({
               />
 
               {/* Row A */}
-              <rect x="80" y="588" width="560" height="30" rx="5" fill="#f4c2c7" stroke="#e09ea5" strokeWidth="1" className="transition-all group-hover:brightness-95" />
-              <text x="360" y="608" textAnchor="middle" fontSize="13" fontWeight="bold" fill="#000000" fontFamily="sans-serif">
-                แถวที่นั่ง A1 - A{rowA.length || 12}
+              <rect 
+                x="80" y="588" width="560" height="30" rx="5" 
+                fill={matchA > 0 ? '#fde047' : '#f4c2c7'} 
+                stroke={matchA > 0 ? '#ca8a04' : '#e09ea5'} 
+                strokeWidth={matchA > 0 ? '2' : '1'} 
+                className="transition-all group-hover:brightness-95" 
+              />
+              <text x="360" y="608" textAnchor="middle" fontSize="13" fontWeight="bold" fill={matchA > 0 ? '#854d0e' : '#000000'} fontFamily="sans-serif">
+                แถวที่นั่ง A1 - A{rowA.length || 12}{matchA > 0 ? ` (พบ ${matchA})` : ''}
               </text>
 
               {/* Row B */}
-              <rect x="80" y="623" width="560" height="30" rx="5" fill="#f4c2c7" stroke="#e09ea5" strokeWidth="1" className="transition-all group-hover:brightness-95" />
-              <text x="360" y="643" textAnchor="middle" fontSize="13" fontWeight="bold" fill="#000000" fontFamily="sans-serif">
-                แถวที่นั่ง B1 - B{rowB.length || 12}
+              <rect 
+                x="80" y="623" width="560" height="30" rx="5" 
+                fill={matchB > 0 ? '#fde047' : '#f4c2c7'} 
+                stroke={matchB > 0 ? '#ca8a04' : '#e09ea5'} 
+                strokeWidth={matchB > 0 ? '2' : '1'} 
+                className="transition-all group-hover:brightness-95" 
+              />
+              <text x="360" y="643" textAnchor="middle" fontSize="13" fontWeight="bold" fill={matchB > 0 ? '#854d0e' : '#000000'} fontFamily="sans-serif">
+                แถวที่นั่ง B1 - B{rowB.length || 12}{matchB > 0 ? ` (พบ ${matchB})` : ''}
               </text>
 
               {/* Row C */}
-              <rect x="80" y="658" width="560" height="30" rx="5" fill="#f4c2c7" stroke="#e09ea5" strokeWidth="1" className="transition-all group-hover:brightness-95" />
-              <text x="360" y="678" textAnchor="middle" fontSize="13" fontWeight="bold" fill="#000000" fontFamily="sans-serif">
-                แถวที่นั่ง C1 - C{rowC.length || 12}
+              <rect 
+                x="80" y="658" width="560" height="30" rx="5" 
+                fill={matchC > 0 ? '#fde047' : '#f4c2c7'} 
+                stroke={matchC > 0 ? '#ca8a04' : '#e09ea5'} 
+                strokeWidth={matchC > 0 ? '2' : '1'} 
+                className="transition-all group-hover:brightness-95" 
+              />
+              <text x="360" y="678" textAnchor="middle" fontSize="13" fontWeight="bold" fill={matchC > 0 ? '#854d0e' : '#000000'} fontFamily="sans-serif">
+                แถวที่นั่ง C1 - C{rowC.length || 12}{matchC > 0 ? ` (พบ ${matchC})` : ''}
               </text>
 
               {/* Row D */}
-              <rect x="80" y="693" width="560" height="30" rx="5" fill="#f4c2c7" stroke="#e09ea5" strokeWidth="1" className="transition-all group-hover:brightness-95" />
-              <text x="360" y="713" textAnchor="middle" fontSize="13" fontWeight="bold" fill="#000000" fontFamily="sans-serif">
-                แถวที่นั่ง D1 - D{rowD.length || 12}
+              <rect 
+                x="80" y="693" width="560" height="30" rx="5" 
+                fill={matchD > 0 ? '#fde047' : '#f4c2c7'} 
+                stroke={matchD > 0 ? '#ca8a04' : '#e09ea5'} 
+                strokeWidth={matchD > 0 ? '2' : '1'} 
+                className="transition-all group-hover:brightness-95" 
+              />
+              <text x="360" y="713" textAnchor="middle" fontSize="13" fontWeight="bold" fill={matchD > 0 ? '#854d0e' : '#000000'} fontFamily="sans-serif">
+                แถวที่นั่ง D1 - D{rowD.length || 12}{matchD > 0 ? ` (พบ ${matchD})` : ''}
               </text>
 
               {/* Row E */}
-              <rect x="80" y="728" width="560" height="30" rx="5" fill="#f4c2c7" stroke="#e09ea5" strokeWidth="1" className="transition-all group-hover:brightness-95" />
-              <text x="360" y="748" textAnchor="middle" fontSize="13" fontWeight="bold" fill="#000000" fontFamily="sans-serif">
-                แถวที่นั่ง E1 - E{rowE.length || 12}
+              <rect 
+                x="80" y="728" width="560" height="30" rx="5" 
+                fill={matchE > 0 ? '#fde047' : '#f4c2c7'} 
+                stroke={matchE > 0 ? '#ca8a04' : '#e09ea5'} 
+                strokeWidth={matchE > 0 ? '2' : '1'} 
+                className="transition-all group-hover:brightness-95" 
+              />
+              <text x="360" y="748" textAnchor="middle" fontSize="13" fontWeight="bold" fill={matchE > 0 ? '#854d0e' : '#000000'} fontFamily="sans-serif">
+                แถวที่นั่ง E1 - E{rowE.length || 12}{matchE > 0 ? ` (พบ ${matchE})` : ''}
               </text>
             </g>
 
@@ -1267,26 +1246,44 @@ export const SeatingCanvas: React.FC<SeatingCanvasProps> = ({
                 height="115"
                 rx="8"
                 fill="transparent"
-                stroke={activeEditZone === 'yellow' ? '#b45309' : 'transparent'}
-                strokeWidth="2.5"
+                stroke={activeEditZone === 'yellow' ? '#b45309' : (matchF + matchG + matchH > 0 ? '#ca8a04' : 'transparent')}
+                strokeWidth={matchF + matchG + matchH > 0 ? '3' : '2.5'}
               />
 
               {/* Row F */}
-              <rect x="670" y="588" width="230" height="30" rx="5" fill="#f3e59a" stroke="#dfce7b" strokeWidth="1" className="transition-all group-hover:brightness-95" />
-              <text x="785" y="608" textAnchor="middle" fontSize="13" fontWeight="bold" fill="#000000" fontFamily="sans-serif">
-                แถวที่นั่ง F1 - F{rowF.length || 6}
+              <rect 
+                x="670" y="588" width="230" height="30" rx="5" 
+                fill={matchF > 0 ? '#fde047' : '#f3e59a'} 
+                stroke={matchF > 0 ? '#ca8a04' : '#dfce7b'} 
+                strokeWidth={matchF > 0 ? '2' : '1'} 
+                className="transition-all group-hover:brightness-95" 
+              />
+              <text x="785" y="608" textAnchor="middle" fontSize="13" fontWeight="bold" fill={matchF > 0 ? '#854d0e' : '#000000'} fontFamily="sans-serif">
+                แถวที่นั่ง F1 - F{rowF.length || 6}{matchF > 0 ? ` (พบ ${matchF})` : ''}
               </text>
 
               {/* Row G */}
-              <rect x="670" y="623" width="230" height="30" rx="5" fill="#f3e59a" stroke="#dfce7b" strokeWidth="1" className="transition-all group-hover:brightness-95" />
-              <text x="785" y="643" textAnchor="middle" fontSize="13" fontWeight="bold" fill="#000000" fontFamily="sans-serif">
-                แถวที่นั่ง G1 - G{rowG.length || 6}
+              <rect 
+                x="670" y="623" width="230" height="30" rx="5" 
+                fill={matchG > 0 ? '#fde047' : '#f3e59a'} 
+                stroke={matchG > 0 ? '#ca8a04' : '#dfce7b'} 
+                strokeWidth={matchG > 0 ? '2' : '1'} 
+                className="transition-all group-hover:brightness-95" 
+              />
+              <text x="785" y="643" textAnchor="middle" fontSize="13" fontWeight="bold" fill={matchG > 0 ? '#854d0e' : '#000000'} fontFamily="sans-serif">
+                แถวที่นั่ง G1 - G{rowG.length || 6}{matchG > 0 ? ` (พบ ${matchG})` : ''}
               </text>
 
               {/* Row H */}
-              <rect x="670" y="658" width="230" height="30" rx="5" fill="#f3e59a" stroke="#dfce7b" strokeWidth="1" className="transition-all group-hover:brightness-95" />
-              <text x="785" y="678" textAnchor="middle" fontSize="13" fontWeight="bold" fill="#000000" fontFamily="sans-serif">
-                แถวที่นั่ง H1 - H{rowH.length || 6}
+              <rect 
+                x="670" y="658" width="230" height="30" rx="5" 
+                fill={matchH > 0 ? '#fde047' : '#f3e59a'} 
+                stroke={matchH > 0 ? '#ca8a04' : '#dfce7b'} 
+                strokeWidth={matchH > 0 ? '2' : '1'} 
+                className="transition-all group-hover:brightness-95" 
+              />
+              <text x="785" y="678" textAnchor="middle" fontSize="13" fontWeight="bold" fill={matchH > 0 ? '#854d0e' : '#000000'} fontFamily="sans-serif">
+                แถวที่นั่ง H1 - H{rowH.length || 6}{matchH > 0 ? ` (พบ ${matchH})` : ''}
               </text>
             </g>
 
@@ -1304,9 +1301,9 @@ export const SeatingCanvas: React.FC<SeatingCanvasProps> = ({
                 width="65"
                 height="390"
                 rx="6"
-                fill="#bcc69f"
-                stroke={activeEditZone === 'green-right' ? '#4d7c0f' : '#a4af86'}
-                strokeWidth={activeEditZone === 'green-right' ? '3' : '1.5'}
+                fill={matchI > 0 ? '#d9f99d' : '#bcc69f'}
+                stroke={matchI > 0 ? '#65a30d' : (activeEditZone === 'green-right' ? '#4d7c0f' : '#a4af86')}
+                strokeWidth={matchI > 0 || activeEditZone === 'green-right' ? '3' : '1.5'}
                 className="transition-all group-hover:brightness-95"
               />
               {/* rect:nth-of-type(2) - Header pill */}
@@ -1319,8 +1316,8 @@ export const SeatingCanvas: React.FC<SeatingCanvasProps> = ({
               <text x="912.5" y="318" textAnchor="middle" fontSize="12" fontWeight="bold" fill="#000000" fontFamily="sans-serif">
                 ที่นั่ง
               </text>
-              <text x="912.5" y="338" textAnchor="middle" fontSize="11" fontWeight="bold" fill="#000000" fontFamily="sans-serif">
-                แถว I
+              <text x="912.5" y="338" textAnchor="middle" fontSize={matchI > 0 ? "12" : "11"} fontWeight="bold" fill={matchI > 0 ? "#4d7c0f" : "#000000"} fontFamily="sans-serif">
+                {matchI > 0 ? `พบ ${matchI} ที่นั่ง` : 'แถว I'}
               </text>
               <text x="912.5" y="358" textAnchor="middle" fontSize="11" fontWeight="bold" fill="#000000" fontFamily="sans-serif">
                 I1 - I{colI.length}
@@ -1336,7 +1333,7 @@ export const SeatingCanvas: React.FC<SeatingCanvasProps> = ({
             >
               {/* Header label above columns */}
               <text x="1025" y="136" textAnchor="middle" fontSize="11.5" fontWeight="bold" fill="#000000" fontFamily="sans-serif">
-                ที่นั่งผู้รับรางวัล
+                ที่นั่งผู้รับรางวัล {matchJ + matchK > 0 ? `(พบ ${matchJ + matchK})` : ''}
               </text>
 
               {/* Column J - Outer Container: rect:nth-of-type(1) */}
@@ -1346,9 +1343,9 @@ export const SeatingCanvas: React.FC<SeatingCanvasProps> = ({
                 width="65"
                 height="390"
                 rx="6"
-                fill="#f6cf8a"
-                stroke={activeEditZone === 'peach-right' ? '#c2410c' : '#deb56c'}
-                strokeWidth={activeEditZone === 'peach-right' ? '3' : '1.5'}
+                fill={matchJ > 0 ? '#fed7aa' : '#f6cf8a'}
+                stroke={matchJ > 0 ? '#ea580c' : (activeEditZone === 'peach-right' ? '#c2410c' : '#deb56c')}
+                strokeWidth={matchJ > 0 || activeEditZone === 'peach-right' ? '3' : '1.5'}
                 className="transition-all group-hover:brightness-95"
               />
               {/* Column J Header Pill: rect:nth-of-type(2) */}
@@ -1361,8 +1358,8 @@ export const SeatingCanvas: React.FC<SeatingCanvasProps> = ({
               <text x="987.5" y="318" textAnchor="middle" fontSize="12" fontWeight="bold" fill="#000000" fontFamily="sans-serif">
                 ที่นั่ง
               </text>
-              <text x="987.5" y="338" textAnchor="middle" fontSize="11" fontWeight="bold" fill="#000000" fontFamily="sans-serif">
-                แถว J
+              <text x="987.5" y="338" textAnchor="middle" fontSize={matchJ > 0 ? "12" : "11"} fontWeight="bold" fill={matchJ > 0 ? "#ea580c" : "#000000"} fontFamily="sans-serif">
+                {matchJ > 0 ? `พบ ${matchJ} ที่นั่ง` : 'แถว J'}
               </text>
               <text x="987.5" y="358" textAnchor="middle" fontSize="11" fontWeight="bold" fill="#000000" fontFamily="sans-serif">
                 J1 - J{colJ.length}
@@ -1375,9 +1372,9 @@ export const SeatingCanvas: React.FC<SeatingCanvasProps> = ({
                 width="65"
                 height="390"
                 rx="6"
-                fill="#f6cf8a"
-                stroke={activeEditZone === 'peach-right' ? '#c2410c' : '#deb56c'}
-                strokeWidth={activeEditZone === 'peach-right' ? '3' : '1.5'}
+                fill={matchK > 0 ? '#fed7aa' : '#f6cf8a'}
+                stroke={matchK > 0 ? '#ea580c' : (activeEditZone === 'peach-right' ? '#c2410c' : '#deb56c')}
+                strokeWidth={matchK > 0 || activeEditZone === 'peach-right' ? '3' : '1.5'}
                 className="transition-all group-hover:brightness-95"
               />
               {/* Column K Header Pill: rect:nth-of-type(4) */}
@@ -1390,8 +1387,8 @@ export const SeatingCanvas: React.FC<SeatingCanvasProps> = ({
               <text x="1062.5" y="318" textAnchor="middle" fontSize="12" fontWeight="bold" fill="#000000" fontFamily="sans-serif">
                 ที่นั่ง
               </text>
-              <text x="1062.5" y="338" textAnchor="middle" fontSize="11" fontWeight="bold" fill="#000000" fontFamily="sans-serif">
-                แถว K
+              <text x="1062.5" y="338" textAnchor="middle" fontSize={matchK > 0 ? "12" : "11"} fontWeight="bold" fill={matchK > 0 ? "#ea580c" : "#000000"} fontFamily="sans-serif">
+                {matchK > 0 ? `พบ ${matchK} ที่นั่ง` : 'แถว K'}
               </text>
               <text x="1062.5" y="358" textAnchor="middle" fontSize="11" fontWeight="bold" fill="#000000" fontFamily="sans-serif">
                 K1 - K{colK.length}

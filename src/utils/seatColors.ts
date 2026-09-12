@@ -139,7 +139,7 @@ export function getThaiVisualLength(str: string): number {
  * Splits text gracefully into lines for SVG rendering, strictly respecting visual length
  * and natural word/syllable breaks so text NEVER exceeds boundaries.
  */
-export function wrapSvgText(text: string, maxVisualChars = 11, maxLines = 2): string[] {
+export function wrapSvgText(text: string, maxVisualChars = 11, maxLines = 4): string[] {
   if (!text) return [];
   const trimmed = text.trim();
   if (getThaiVisualLength(trimmed) <= maxVisualChars) {
@@ -190,7 +190,11 @@ export function wrapSvgText(text: string, maxVisualChars = 11, maxLines = 2): st
         lines.push(currentLine);
         currentLine = '';
       }
-      if (lines.length >= maxLines) break;
+      if (lines.length >= maxLines - 1) {
+        // On the last allowed line, append remaining segments so text is never dropped
+        currentLine = currentLine ? `${currentLine} ${seg}` : seg;
+        continue;
+      }
 
       // Check if segment itself is longer than maxVisualChars
       if (getThaiVisualLength(seg) <= maxVisualChars) {
@@ -198,7 +202,7 @@ export function wrapSvgText(text: string, maxVisualChars = 11, maxLines = 2): st
       } else {
         // Slice long segment by visual length
         let remaining = seg;
-        while (remaining.length > 0 && lines.length < maxLines) {
+        while (remaining.length > 0 && lines.length < maxLines - 1) {
           let sliceLen = 1;
           while (
             sliceLen < remaining.length &&
@@ -215,11 +219,14 @@ export function wrapSvgText(text: string, maxVisualChars = 11, maxLines = 2): st
             lines.push(chunk);
           }
         }
+        if (remaining.length > 0) {
+          currentLine = currentLine ? `${currentLine}${remaining}` : remaining;
+        }
       }
     }
   }
 
-  if (currentLine && lines.length < maxLines) {
+  if (currentLine) {
     lines.push(currentLine);
   }
 

@@ -429,7 +429,12 @@ export async function fetchGoogleSheetViaApi(
       }
     }
     if (!selectedTitle && sheetsList.length > 0) {
-      selectedTitle = sheetsList[0].title;
+      // Prefer sheet that is not dedicated to the plan image
+      const guestSheet = sheetsList.find(s => {
+        const norm = s.title.toLowerCase().replace(/[^a-z0-9\u0E00-\u0E7F]/g, '');
+        return norm !== 'ภาพผัง' && norm !== 'planimage' && norm !== 'ผังที่นั่ง' && norm !== 'plan';
+      });
+      selectedTitle = guestSheet ? guestSheet.title : sheetsList[0].title;
     }
 
     if (!selectedTitle) {
@@ -496,6 +501,54 @@ export async function fetchGoogleSheetViaApi(
     });
 
     const parsedResult = mapSheetRowsToSeats(table);
+
+    // 4. Check dedicated 'ภาพผัง' tab for seating plan image link
+    const planTabSheet = sheetsList.find(s => {
+      const norm = s.title.toLowerCase().replace(/[^a-z0-9\u0E00-\u0E7F]/g, '');
+      return norm === 'ภาพผัง' || norm === 'planimage' || norm === 'ผังที่นั่ง' || norm === 'plan' || norm === 'seatingplan';
+    });
+
+    if (planTabSheet) {
+      try {
+        const planRange = encodeURIComponent(planTabSheet.title);
+        const planRes = await fetch(
+          `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${planRange}?valueRenderOption=FORMATTED_VALUE`,
+          {
+            headers: {
+              Authorization: `Bearer ${accessToken}`,
+              Accept: 'application/json',
+            },
+          }
+        );
+        if (planRes.ok) {
+          const planData = await planRes.json();
+          const planValues: any[][] = planData.values || [];
+          let foundDriveUrl = '';
+          for (const row of planValues) {
+            for (const cell of row) {
+              const val = String(cell || '').trim();
+              if (
+                val.includes('drive.google.com') ||
+                val.includes('googleusercontent.com') ||
+                val.startsWith('http://') ||
+                val.startsWith('https://')
+              ) {
+                foundDriveUrl = val;
+                break;
+              }
+            }
+            if (foundDriveUrl) break;
+          }
+          if (foundDriveUrl) {
+            parsedResult.planDriveUrl = foundDriveUrl;
+            parsedResult.planImageUrl = convertGoogleDriveUrl(foundDriveUrl);
+          }
+        }
+      } catch (planErr) {
+        console.warn('Could not read dedicated plan tab:', planErr);
+      }
+    }
+
     return {
       ...parsedResult,
       availableSheets,
@@ -584,6 +637,51 @@ export async function fetchGoogleSheetData(
 
       const table = parseCsvOrTsv(text);
       const parsedResult = mapSheetRowsToSeats(table);
+
+      // Check if there is a dedicated 'ภาพผัง' tab in public Google Sheet via GViz
+      if (!parsedResult.planDriveUrl) {
+        const planTabNames = ['ภาพผัง', 'PlanImage', 'ผังที่นั่ง'];
+        for (const tabName of planTabNames) {
+          try {
+            const planGvizUrl = `https://docs.google.com/spreadsheets/d/${spreadsheetId}/gviz/tq?tqx=out:csv&sheet=${encodeURIComponent(tabName)}&_t=${Date.now()}`;
+            const planRes = await fetch(planGvizUrl, { cache: 'no-store' });
+            if (planRes.ok) {
+              const planText = await planRes.text();
+              if (
+                !planText.includes('<!DOCTYPE html>') &&
+                !planText.includes('<html') &&
+                !planText.includes('accounts.google.com')
+              ) {
+                const planRows = parseCsvOrTsv(planText);
+                let foundPlanUrl = '';
+                for (const row of planRows) {
+                  for (const cell of row) {
+                    const c = cell.trim();
+                    if (
+                      c.includes('drive.google.com') ||
+                      c.includes('googleusercontent.com') ||
+                      c.startsWith('http://') ||
+                      c.startsWith('https://')
+                    ) {
+                      foundPlanUrl = c;
+                      break;
+                    }
+                  }
+                  if (foundPlanUrl) break;
+                }
+                if (foundPlanUrl) {
+                  parsedResult.planDriveUrl = foundPlanUrl;
+                  parsedResult.planImageUrl = convertGoogleDriveUrl(foundPlanUrl);
+                  break;
+                }
+              }
+            }
+          } catch {
+            // ignore
+          }
+        }
+      }
+
       if (parsedResult.success) {
         return parsedResult;
       } else {
@@ -685,18 +783,39 @@ export function downloadGoogleSheetTemplateCsv(seats: Record<string, Seat>, curr
 }
 
 /**
+ * Generates TSV text for creating the dedicated 'ภาพผัง' tab in Google Sheets
+ */
+export function generatePlanTabTsv(currentDriveUrl?: string): string {
+  const headers = ['รายการ (Item)', 'ลิงก์ภาพผังพิธีการ (Google Drive / Direct URL)', 'คำอธิบาย (Description)', 'วันที่อัปเดตล่าสุด'];
+  const dataRow = [
+    'ภาพผังที่นั่งพิธีการ',
+    currentDriveUrl || 'https://drive.google.com/file/d/วางรหัสไฟล์ที่นี่/view',
+    'ระบบผังที่นั่งวันศิลป์ พีระศรี (Auto-synced)',
+    new Date().toLocaleDateString('th-TH')
+  ];
+  const configRow = [
+    '#PLAN_IMAGE',
+    currentDriveUrl || 'https://drive.google.com/file/d/วางรหัสไฟล์ที่นี่/view',
+    'CONFIG',
+    ''
+  ];
+  return [headers.join('\t'), dataRow.join('\t'), configRow.join('\t')].join('\n');
+}
+
+/**
  * Saves or updates the Google Drive Seating Plan image link into Google Sheets via API
+ * Creates or updates a dedicated 'ภาพผัง' tab in the spreadsheet to keep plan images clean and separate from guest lists.
  */
 export async function saveDriveImageLinkToGoogleSheet(
   spreadsheetId: string,
   accessToken: string,
   driveUrl: string,
-  sheetTabTitle: string = 'Sheet1'
+  preferredTabTitle: string = 'ภาพผัง'
 ): Promise<{ success: boolean; message: string }> {
   try {
-    const range = encodeURIComponent(sheetTabTitle);
-    const getRes = await fetch(
-      `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${range}?valueRenderOption=FORMATTED_VALUE`,
+    // 1. Fetch spreadsheet metadata to check existing tabs
+    const metaRes = await fetch(
+      `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}?fields=sheets.properties`,
       {
         headers: {
           Authorization: `Bearer ${accessToken}`,
@@ -705,98 +824,105 @@ export async function saveDriveImageLinkToGoogleSheet(
       }
     );
 
-    if (!getRes.ok) {
+    if (!metaRes.ok) {
       return {
         success: false,
-        message: `ไม่สามารถเข้าถึงแผ่นงานได้ (HTTP ${getRes.status}) กรุณาตรวจสอบสิทธิ์การแก้ไข`,
+        message: `ไม่สามารถเข้าถึง Google Sheet ได้ (HTTP ${metaRes.status}) กรุณาตรวจสอบสิทธิ์การแก้ไขชีต`,
       };
     }
 
-    const data = await getRes.json();
-    const rows: string[][] = data.values || [];
-    let existingRowIndex = -1;
+    const metaData = await metaRes.json();
+    const sheetsList: Array<{ title: string; sheetId: number }> = (metaData.sheets || []).map(
+      (s: any) => ({
+        title: s.properties?.title || '',
+        sheetId: s.properties?.sheetId ?? 0,
+      })
+    );
 
-    for (let i = 0; i < rows.length; i++) {
-      const firstCell = String(rows[i]?.[0] || '').trim().toUpperCase();
-      if (firstCell === '#PLAN_IMAGE' || firstCell === 'PLAN_IMAGE' || firstCell === '#CONFIG_IMAGE') {
-        existingRowIndex = i;
-        break;
+    // Look for existing tab named 'ภาพผัง' or similar
+    let targetTabTitle = preferredTabTitle || 'ภาพผัง';
+    const existingPlanTab = sheetsList.find(s => {
+      const norm = s.title.toLowerCase().replace(/[^a-z0-9\u0E00-\u0E7F]/g, '');
+      return norm === 'ภาพผัง' || norm === 'planimage' || norm === 'ผังที่นั่ง' || norm === 'seatingplan' || norm === 'plan';
+    });
+
+    if (existingPlanTab) {
+      targetTabTitle = existingPlanTab.title;
+    } else {
+      // Create new tab 'ภาพผัง' in this spreadsheet
+      try {
+        const addSheetRes = await fetch(
+          `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}:batchUpdate`,
+          {
+            method: 'POST',
+            headers: {
+              Authorization: `Bearer ${accessToken}`,
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+              requests: [
+                {
+                  addSheet: {
+                    properties: {
+                      title: 'ภาพผัง',
+                      gridProperties: {
+                        rowCount: 20,
+                        columnCount: 6,
+                      },
+                      tabColorStyle: {
+                        rgbColor: { red: 0.1, green: 0.6, blue: 0.3 },
+                      },
+                    },
+                  },
+                },
+              ],
+            }),
+          }
+        );
+        if (addSheetRes.ok) {
+          targetTabTitle = 'ภาพผัง';
+        }
+      } catch (addErr) {
+        console.warn('Could not auto-create tab "ภาพผัง", will try write directly:', addErr);
       }
     }
 
-    const configRow = [
-      '#PLAN_IMAGE',
-      'CONFIG',
-      '0',
-      'ลิงก์ภาพผังพิธีการ (Google Drive)',
-      driveUrl.trim(),
-      'ระบบผังที่นั่งวันศิลป์ พีระศรี',
-      'CONFIG',
-      'NO',
-      'confirmed',
-      'Seating Plan Background Image Link (Auto-synced)'
+    // 2. Write the plan image link data to targetTabTitle ('ภาพผัง')
+    const updateRange = encodeURIComponent(`'${targetTabTitle}'!A1:D3`);
+    const dateStr = new Date().toLocaleString('th-TH');
+    const updateValues = [
+      ['รายการ (Item)', 'ลิงก์ภาพผัง (Google Drive / Direct Image URL)', 'คำอธิบาย (Description)', 'วันที่อัปเดต (Last Updated)'],
+      ['ภาพผังที่นั่งพิธีการ', driveUrl.trim(), 'ผังที่นั่งวันศิลป์ พีระศรี (Auto-synced)', dateStr],
+      ['#PLAN_IMAGE', driveUrl.trim(), 'CONFIG', '']
     ];
 
-    if (existingRowIndex >= 0) {
-      const rowNum = existingRowIndex + 1;
-      const updateRange = encodeURIComponent(`${sheetTabTitle}!A${rowNum}:J${rowNum}`);
-      const updateRes = await fetch(
-        `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${updateRange}?valueInputOption=USER_ENTERED`,
-        {
-          method: 'PUT',
-          headers: {
-            Authorization: `Bearer ${accessToken}`,
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({
-            range: `${sheetTabTitle}!A${rowNum}:J${rowNum}`,
-            majorDimension: 'ROWS',
-            values: [configRow],
-          }),
-        }
-      );
-
-      if (!updateRes.ok) {
-        return {
-          success: false,
-          message: `อัปเดตแถวใน Google Sheet ไม่สำเร็จ (HTTP ${updateRes.status})`,
-        };
+    const updateRes = await fetch(
+      `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${updateRange}?valueInputOption=USER_ENTERED`,
+      {
+        method: 'PUT',
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          range: `'${targetTabTitle}'!A1:D3`,
+          majorDimension: 'ROWS',
+          values: updateValues,
+        }),
       }
+    );
 
+    if (!updateRes.ok) {
       return {
-        success: true,
-        message: 'อัปเดตแถว #PLAN_IMAGE ใน Google Sheet สำเร็จแล้ว ทุกคนที่เปิดเว็บจะได้รับภาพผังใหม่โดยอัตโนมัติ!',
-      };
-    } else {
-      const appendRange = encodeURIComponent(sheetTabTitle);
-      const appendRes = await fetch(
-        `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${appendRange}:append?valueInputOption=USER_ENTERED&insertDataOption=INSERT_ROWS`,
-        {
-          method: 'POST',
-          headers: {
-            Authorization: `Bearer ${accessToken}`,
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({
-            range: sheetTabTitle,
-            majorDimension: 'ROWS',
-            values: [configRow],
-          }),
-        }
-      );
-
-      if (!appendRes.ok) {
-        return {
-          success: false,
-          message: `เพิ่มแถวใน Google Sheet ไม่สำเร็จ (HTTP ${appendRes.status})`,
-        };
-      }
-
-      return {
-        success: true,
-        message: 'บันทึกแถว #PLAN_IMAGE พร้อมลิงก์ Google Drive ลงใน Google Sheet เรียบร้อยแล้ว!',
+        success: false,
+        message: `บันทึกลงใน Tab "${targetTabTitle}" ไม่สำเร็จ (HTTP ${updateRes.status}) กรุณาตรวจสอบสิทธิ์การแก้ไขชีต`,
       };
     }
+
+    return {
+      success: true,
+      message: `บันทึกลิงก์ภาพผังลงใน Tab "${targetTabTitle}" ของ Google Sheet เรียบร้อยแล้ว! ทุกคนที่เปิดเว็บจะได้รับภาพผังใหม่โดยอัตโนมัติ`,
+    };
   } catch (err) {
     return {
       success: false,
