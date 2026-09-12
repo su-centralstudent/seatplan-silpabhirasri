@@ -1115,8 +1115,8 @@ export const SeatingCanvas: React.FC<SeatingCanvasProps> = ({
               fontFamily="sans-serif"
               className="cursor-pointer hover:fill-blue-600 transition-colors"
               onClick={handleOpenPlanModal}
-              title="คลิกเพื่อตั้งค่าผังและแก้ไขปี พ.ศ."
             >
+              <title>คลิกเพื่อตั้งค่าผังและแก้ไขปี พ.ศ.</title>
               {metadata.eventTitle || 'แผนผังที่นั่งสำหรับแขกผู้มีเกียรติงานวันศิลป์ พีระศรี ในพิธีการ'} ({
                 metadata.year?.startsWith('ประจำปี') 
                   ? metadata.year 

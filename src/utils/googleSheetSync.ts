@@ -1,4 +1,4 @@
-import { Seat, SeatStatus, SeatCategory } from '../types';
+import { Seat, SeatStatus, SeatCategory, UnassignedGuest } from '../types';
 import { convertGoogleDriveUrl } from '../data/googleSheetConfig';
 
 export interface ParsedGoogleSheetRow {
@@ -927,6 +927,361 @@ export async function saveDriveImageLinkToGoogleSheet(
     return {
       success: false,
       message: err instanceof Error ? err.message : 'เกิดข้อผิดพลาดในการบันทึกข้อมูลลง Google Sheet',
+    };
+  }
+}
+
+/**
+ * Helper to discover the guest list tab title in a spreadsheet
+ */
+async function discoverGuestTabTitle(spreadsheetId: string, accessToken: string, preferredTab?: string): Promise<string> {
+  if (preferredTab && preferredTab.trim()) return preferredTab.trim();
+  try {
+    const metaRes = await fetch(
+      `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}?fields=sheets.properties`,
+      {
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          Accept: 'application/json',
+        },
+      }
+    );
+    if (metaRes.ok) {
+      const meta = await metaRes.json();
+      const sheets = (meta.sheets || []).map((s: any) => s.properties?.title || '');
+      const nonPlan = sheets.find((t: string) => {
+        const norm = t.toLowerCase().replace(/[^a-z0-9\u0E00-\u0E7F]/g, '');
+        return norm !== 'ภาพผัง' && norm !== 'plan' && norm !== 'planimage' && norm !== 'ผังที่นั่ง' && norm !== 'seatingplan';
+      });
+      if (nonPlan) return nonPlan;
+      if (sheets.length > 0) return sheets[0];
+    }
+  } catch (e) {
+    console.warn('Failed to discover guest tab title:', e);
+  }
+  return 'แขกผู้มีเกียรติ';
+}
+
+/**
+ * Updates, adds, or deletes an individual seat in Google Sheet via Google Sheets REST API
+ */
+export async function updateSeatInGoogleSheet(
+  sheetUrl: string,
+  accessToken: string,
+  seat: Partial<Seat> & { id: string },
+  action: 'update' | 'add' | 'delete' = 'update',
+  customTab?: string
+): Promise<{ success: boolean; message: string }> {
+  try {
+    const spreadsheetId = extractSpreadsheetId(sheetUrl);
+    if (!spreadsheetId) {
+      return { success: false, message: 'URL Google Sheet ไม่ถูกต้อง' };
+    }
+    if (!accessToken) {
+      return { success: false, message: 'กรุณาเข้าสู่ระบบ Google เพื่ออัปเดตข้อมูลกลับไปยัง Google Sheet' };
+    }
+
+    const tabTitle = await discoverGuestTabTitle(spreadsheetId, accessToken, customTab);
+    const range = encodeURIComponent(`'${tabTitle}'!A:G`);
+
+    // Fetch existing rows from the sheet
+    const getRes = await fetch(
+      `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${range}?valueRenderOption=FORMATTED_VALUE`,
+      {
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          Accept: 'application/json',
+        },
+      }
+    );
+
+    if (!getRes.ok) {
+      return {
+        success: false,
+        message: `ไม่สามารถอ่านข้อมูล Google Sheet ได้ (HTTP ${getRes.status}) กรุณาตรวจสอบสิทธิ์การแก้ไขชีต`,
+      };
+    }
+
+    const data = await getRes.json();
+    const rows: string[][] = data.values || [];
+
+    if (rows.length === 0) {
+      return { success: false, message: 'ไม่พบข้อมูลตารางใน Google Sheet' };
+    }
+
+    // Inspect header row to detect columns
+    const headers = rows[0].map(h => (h || '').trim().toLowerCase());
+    let seatCol = headers.findIndex(h => h.includes('ที่นั่ง') || h.includes('seat') || h.includes('รหัส'));
+    let nameCol = headers.findIndex(h => h.includes('ชื่อ') || h.includes('รายชื่อ') || h.includes('name'));
+    let posCol = headers.findIndex(h => h.includes('ตำแหน่ง') || h.includes('สังกัด') || h.includes('position') || h.includes('org'));
+    let setCol = headers.findIndex(h => h.includes('set') || h.includes('ลำดับ'));
+    let flowerCol = headers.findIndex(h => h.includes('กระเช้า') || h.includes('flower'));
+    let artCol = headers.findIndex(h => h.includes('art'));
+    let statusCol = headers.findIndex(h => h.includes('สถานะ') || h.includes('status'));
+
+    if (seatCol === -1) seatCol = 5;
+    if (nameCol === -1) nameCol = 0;
+    if (posCol === -1) posCol = 1;
+    if (setCol === -1) setCol = 2;
+    if (flowerCol === -1) flowerCol = 3;
+    if (artCol === -1) artCol = 4;
+    if (statusCol === -1) statusCol = 6;
+
+    const targetSeatId = seat.id.trim().toUpperCase();
+    let rowIndex = -1;
+
+    for (let i = 1; i < rows.length; i++) {
+      const currentSeatId = (rows[i][seatCol] || '').trim().toUpperCase();
+      if (currentSeatId === targetSeatId) {
+        rowIndex = i;
+        break;
+      }
+    }
+
+    const posOrg = seat.organization
+      ? (seat.position && seat.position !== seat.organization ? `${seat.position} (${seat.organization})` : seat.organization)
+      : (seat.position || '');
+
+    const statusText = seat.status === 'confirmed'
+      ? 'เข้าร่วม'
+      : seat.status === 'checked_in'
+      ? 'เช็คอินแล้ว'
+      : seat.status === 'absent'
+      ? 'สละสิทธิ์'
+      : seat.status === 'pending'
+      ? 'รอการตอบกลับ'
+      : (seat.guestName ? 'เข้าร่วม' : 'ว่าง');
+
+    if (action === 'delete') {
+      if (rowIndex !== -1) {
+        const rowNumber = rowIndex + 1;
+        const targetRow = [...rows[rowIndex]];
+        while (targetRow.length < 7) targetRow.push('');
+        targetRow[nameCol] = '';
+        targetRow[posCol] = '';
+        targetRow[setCol] = '';
+        targetRow[flowerCol] = 'FALSE';
+        targetRow[artCol] = 'FALSE';
+        targetRow[statusCol] = 'ว่าง';
+
+        const updateRange = encodeURIComponent(`'${tabTitle}'!A${rowNumber}:G${rowNumber}`);
+        const updateRes = await fetch(
+          `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${updateRange}?valueInputOption=USER_ENTERED`,
+          {
+            method: 'PUT',
+            headers: {
+              Authorization: `Bearer ${accessToken}`,
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+              range: `'${tabTitle}'!A${rowNumber}:G${rowNumber}`,
+              majorDimension: 'ROWS',
+              values: [targetRow.slice(0, 7)],
+            }),
+          }
+        );
+
+        if (!updateRes.ok) {
+          return { success: false, message: `อัปเดต Google Sheet ไม่สำเร็จ (HTTP ${updateRes.status})` };
+        }
+      }
+      return { success: true, message: `ลบ/ล้างข้อมูลที่นั่ง ${seat.id} ใน Google Sheet สำเร็จ` };
+    }
+
+    if (rowIndex !== -1) {
+      // Row exists: update in place
+      const rowNumber = rowIndex + 1;
+      const targetRow = [...rows[rowIndex]];
+      while (targetRow.length < 7) targetRow.push('');
+      targetRow[nameCol] = seat.guestName || '';
+      targetRow[posCol] = posOrg;
+      targetRow[setCol] = seat.setGroup || '';
+      targetRow[flowerCol] = seat.hasFlowerBasket ? 'TRUE' : 'FALSE';
+      targetRow[artCol] = seat.hasArtSet ? 'TRUE' : 'FALSE';
+      targetRow[seatCol] = seat.id;
+      targetRow[statusCol] = statusText;
+
+      const updateRange = encodeURIComponent(`'${tabTitle}'!A${rowNumber}:G${rowNumber}`);
+      const updateRes = await fetch(
+        `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${updateRange}?valueInputOption=USER_ENTERED`,
+        {
+          method: 'PUT',
+          headers: {
+            Authorization: `Bearer ${accessToken}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            range: `'${tabTitle}'!A${rowNumber}:G${rowNumber}`,
+            majorDimension: 'ROWS',
+            values: [targetRow.slice(0, 7)],
+          }),
+        }
+      );
+
+      if (!updateRes.ok) {
+        return { success: false, message: `อัปเดต Google Sheet ไม่สำเร็จ (HTTP ${updateRes.status})` };
+      }
+      return { success: true, message: `อัปเดตข้อมูลที่นั่ง ${seat.id} ใน Google Sheet เรียบร้อยแล้ว` };
+    } else {
+      // Append new row
+      const newRow = new Array(7).fill('');
+      newRow[nameCol] = seat.guestName || '';
+      newRow[posCol] = posOrg;
+      newRow[setCol] = seat.setGroup || '';
+      newRow[flowerCol] = seat.hasFlowerBasket ? 'TRUE' : 'FALSE';
+      newRow[artCol] = seat.hasArtSet ? 'TRUE' : 'FALSE';
+      newRow[seatCol] = seat.id;
+      newRow[statusCol] = statusText;
+
+      const appendRange = encodeURIComponent(`'${tabTitle}'!A:G`);
+      const appendRes = await fetch(
+        `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${appendRange}:append?valueInputOption=USER_ENTERED`,
+        {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${accessToken}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            range: `'${tabTitle}'!A:G`,
+            majorDimension: 'ROWS',
+            values: [newRow],
+          }),
+        }
+      );
+
+      if (!appendRes.ok) {
+        return { success: false, message: `เพิ่มแถวใน Google Sheet ไม่สำเร็จ (HTTP ${appendRes.status})` };
+      }
+      return { success: true, message: `เพิ่มที่นั่ง ${seat.id} ลงใน Google Sheet เรียบร้อยแล้ว` };
+    }
+  } catch (err) {
+    return {
+      success: false,
+      message: err instanceof Error ? err.message : 'เกิดข้อผิดพลาดในการบันทึกข้อมูลลง Google Sheet',
+    };
+  }
+}
+
+/**
+ * Pushes the full seating plan and guest list from the web application to Google Sheet
+ */
+export async function pushFullPlanToGoogleSheet(
+  sheetUrl: string,
+  accessToken: string,
+  seats: Record<string, Seat>,
+  unassignedGuests: UnassignedGuest[] = [],
+  customTab?: string
+): Promise<{ success: boolean; message: string; updatedCount: number }> {
+  try {
+    const spreadsheetId = extractSpreadsheetId(sheetUrl);
+    if (!spreadsheetId) {
+      return { success: false, message: 'URL Google Sheet ไม่ถูกต้อง', updatedCount: 0 };
+    }
+    if (!accessToken) {
+      return { success: false, message: 'กรุณาเข้าสู่ระบบ Google เพื่ออัปเดตข้อมูลกลับไปยัง Google Sheet', updatedCount: 0 };
+    }
+
+    const tabTitle = await discoverGuestTabTitle(spreadsheetId, accessToken, customTab);
+    const headers = ['รายชื่อ/ตำแหน่ง', 'ตำแหน่ง/สังกัด', 'ลำดับการวาง (Set)', 'วางกระเช้าดอกไม้', 'วาง Art Set', 'ที่นั่ง', 'สถานะการตอบกลับ'];
+
+    const sortedSeats = Object.values(seats).sort((a, b) => {
+      if (a.row !== b.row) return a.row.localeCompare(b.row);
+      return a.number - b.number;
+    });
+
+    const rows: string[][] = [headers];
+
+    sortedSeats.forEach(seat => {
+      if (seat.guestName || seat.status !== 'empty') {
+        const posOrg = seat.organization
+          ? (seat.position && seat.position !== seat.organization ? `${seat.position} (${seat.organization})` : seat.organization)
+          : (seat.position || '');
+        const statusText = seat.status === 'confirmed'
+          ? 'เข้าร่วม'
+          : seat.status === 'checked_in'
+          ? 'เช็คอินแล้ว'
+          : seat.status === 'absent'
+          ? 'สละสิทธิ์'
+          : seat.status === 'pending'
+          ? 'รอการตอบกลับ'
+          : 'ว่าง';
+
+        rows.push([
+          seat.guestName || '',
+          posOrg,
+          seat.setGroup || '',
+          seat.hasFlowerBasket ? 'TRUE' : 'FALSE',
+          seat.hasArtSet ? 'TRUE' : 'FALSE',
+          seat.id,
+          statusText,
+        ]);
+      }
+    });
+
+    unassignedGuests.forEach(u => {
+      if (u.name) {
+        rows.push([
+          u.name,
+          u.organization || u.position || '',
+          u.setGroup || '',
+          u.hasFlowerBasket ? 'TRUE' : 'FALSE',
+          u.hasArtSet ? 'TRUE' : 'FALSE',
+          '-',
+          u.status === 'confirmed' ? 'เข้าร่วม' : 'รอการตอบกลับ',
+        ]);
+      }
+    });
+
+    // Clear existing data in the tab first
+    const clearRange = encodeURIComponent(`'${tabTitle}'!A1:G${Math.max(rows.length + 50, 200)}`);
+    await fetch(
+      `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${clearRange}:clear`,
+      {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          'Content-Type': 'application/json',
+        },
+      }
+    );
+
+    // Write all rows
+    const updateRange = encodeURIComponent(`'${tabTitle}'!A1:G${rows.length}`);
+    const updateRes = await fetch(
+      `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${updateRange}?valueInputOption=USER_ENTERED`,
+      {
+        method: 'PUT',
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          range: `'${tabTitle}'!A1:G${rows.length}`,
+          majorDimension: 'ROWS',
+          values: rows,
+        }),
+      }
+    );
+
+    if (!updateRes.ok) {
+      return {
+        success: false,
+        message: `บันทึกข้อมูลกลับ Google Sheet ไม่สำเร็จ (HTTP ${updateRes.status}) กรุณาตรวจสอบสิทธิ์ของบัญชี`,
+        updatedCount: 0,
+      };
+    }
+
+    return {
+      success: true,
+      message: `อัปเดตข้อมูลทั้งหมด (${rows.length - 1} รายการ) ไปยัง Google Sheet แถบ "${tabTitle}" สำเร็จเรียบร้อยแล้ว`,
+      updatedCount: rows.length - 1,
+    };
+  } catch (err) {
+    return {
+      success: false,
+      message: err instanceof Error ? err.message : 'เกิดข้อผิดพลาดในการบันทึกข้อมูลลง Google Sheet',
+      updatedCount: 0,
     };
   }
 }

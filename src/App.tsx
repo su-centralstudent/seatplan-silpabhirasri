@@ -22,7 +22,9 @@ import { Check, Info, AlertCircle } from 'lucide-react';
 import { 
   saveDriveImageLinkToGoogleSheet, 
   extractSpreadsheetId, 
-  fetchGoogleSheetData 
+  fetchGoogleSheetData,
+  updateSeatInGoogleSheet,
+  pushFullPlanToGoogleSheet
 } from './utils/googleSheetSync';
 import { 
   getConfiguredSheetUrl, 
@@ -266,6 +268,34 @@ export default function App() {
             }
           });
 
+          // Ensure seats not assigned in Google Sheet (such as B7) are cleared from any previous mock/ghost data
+          const sheetAssignedIds = new Set(
+            result.rows
+              .filter(r => r.seatId && ((r.guestName && r.guestName.trim()) || (r.position && r.position.trim())))
+              .map(r => r.seatId.trim().toUpperCase())
+          );
+
+          Object.keys(nextSeats).forEach(seatId => {
+            const currentSeat = nextSeats[seatId];
+            if (!sheetAssignedIds.has(seatId.toUpperCase()) && (currentSeat.guestName || currentSeat.status !== 'empty')) {
+              hasChanges = true;
+              changedCount++;
+              nextSeats[seatId] = {
+                ...currentSeat,
+                guestName: '',
+                organization: '',
+                position: `ที่นั่งสำรอง ${seatId}`,
+                setGroup: '',
+                hasFlowerBasket: false,
+                hasArtSet: false,
+                status: 'empty',
+                notes: '',
+                checkInTime: '',
+                category: 'general',
+              };
+            }
+          });
+
           // Ensure J1-J8 and K1-K10 always have clean sequence number labels (1-8 and 1-10)
           for (let i = 1; i <= 8; i++) {
             const jId = `J${i}`;
@@ -443,8 +473,9 @@ export default function App() {
     };
   }, [autoSyncFromSheet, syncGitHubPlanConfig]);
 
-  // Assign an unassigned guest to an empty/target seat
-  const handleAssignGuestToSeat = (guest: UnassignedGuest, seatId: string) => {
+  // Assign an unassigned guest to an empty/target seat (with sync to Google Sheet)
+  const handleAssignGuestToSeat = async (guest: UnassignedGuest, seatId: string) => {
+    let assignedSeat: Seat | null = null;
     setPlanState(prev => {
       const target = prev.seats[seatId];
       if (!target) return prev;
@@ -459,6 +490,7 @@ export default function App() {
         status: guest.status || 'confirmed',
         notes: guest.notes || target.notes,
       };
+      assignedSeat = updatedSeat;
       const remainingUnassigned = (prev.unassignedGuests || []).filter(g => g.id !== guest.id);
       return {
         ...prev,
@@ -470,6 +502,18 @@ export default function App() {
       };
     });
     showToast(`จัดที่นั่ง ${seatId} ให้แก่ ${guest.name} เรียบร้อยแล้ว`);
+
+    if (assignedSeat) {
+      const sheetUrl = getConfiguredSheetUrl();
+      const token = getAccessToken();
+      if (token && sheetUrl) {
+        try {
+          await updateSeatInGoogleSheet(sheetUrl, token, assignedSeat, 'update');
+        } catch {
+          // silent
+        }
+      }
+    }
   };
 
   // Route handlers
@@ -485,8 +529,8 @@ export default function App() {
     showToast('รีเซ็ตเส้นทางเดินกลับเป็นค่ามาตรฐานแล้ว');
   };
 
-  // Update a single seat
-  const handleSaveSeat = (updatedSeat: Seat) => {
+  // Update a single seat (with Two-Way Sync to Google Sheet if signed in)
+  const handleSaveSeat = async (updatedSeat: Seat) => {
     setPlanState(prev => {
       const nextSeats = {
         ...prev.seats,
@@ -497,16 +541,32 @@ export default function App() {
         seats: nextSeats,
       };
     });
-    showToast(`อัปเดตข้อมูลที่นั่ง ${updatedSeat.label || updatedSeat.id} สำเร็จ`);
+
+    const sheetUrl = getConfiguredSheetUrl();
+    const token = getAccessToken();
+    if (token && sheetUrl) {
+      try {
+        const syncRes = await updateSeatInGoogleSheet(sheetUrl, token, updatedSeat, 'update');
+        if (syncRes.success) {
+          showToast(`บันทึก ${updatedSeat.label || updatedSeat.id} และอัปเดตลง Google Sheet เรียบร้อย ✓`);
+        } else {
+          showToast(`บันทึกในระบบแล้ว (${syncRes.message})`);
+        }
+      } catch {
+        showToast(`บันทึกในระบบแล้ว`);
+      }
+    } else {
+      showToast(`อัปเดตข้อมูลที่นั่ง ${updatedSeat.label || updatedSeat.id} สำเร็จ`);
+    }
   };
 
   // Swap two seats
-  const handleSwapSeats = (seatId1: string, seatId2: string) => {
+  const handleSwapSeats = async (seatId1: string, seatId2: string) => {
     const seat1 = planState.seats[seatId1];
     const seat2 = planState.seats[seatId2];
     if (!seat1 || !seat2) return;
 
-    // Preserve seat ID, row, and number, but swap content (guestName, position, organization, setGroup, category, colorBg, notes, hasFlowerBasket, hasArtSet)
+    // Preserve seat ID, row, and number, but swap content
     const newSeat1: Seat = {
       ...seat1,
       guestName: seat2.guestName,
@@ -545,10 +605,24 @@ export default function App() {
     }));
 
     showToast(`สลับตำแหน่งที่นั่ง ${seat1.label || seat1.id} ↔ ${seat2.label || seat2.id} เรียบร้อยแล้ว`);
+
+    const sheetUrl = getConfiguredSheetUrl();
+    const token = getAccessToken();
+    if (token && sheetUrl) {
+      try {
+        await Promise.all([
+          updateSeatInGoogleSheet(sheetUrl, token, newSeat1, 'update'),
+          updateSeatInGoogleSheet(sheetUrl, token, newSeat2, 'update'),
+        ]);
+        showToast(`อัปเดตตำแหน่งที่สลับลง Google Sheet เรียบร้อยแล้ว ✓`);
+      } catch {
+        // silent
+      }
+    }
   };
 
-  // Clear a seat
-  const handleClearSeat = (seatId: string) => {
+  // Clear a seat (with Two-Way Sync to Google Sheet)
+  const handleClearSeat = async (seatId: string) => {
     setPlanState(prev => {
       const current = prev.seats[seatId];
       if (!current) return prev;
@@ -558,7 +632,7 @@ export default function App() {
         row: current.row,
         number: current.number,
         label: current.label,
-        position: '',
+        position: `ที่นั่งสำรอง ${current.id}`,
         guestName: '',
         organization: '',
         setGroup: '',
@@ -579,17 +653,26 @@ export default function App() {
       };
     });
     showToast(`ล้างข้อมูลที่นั่ง ${seatId} เรียบร้อยแล้ว`);
+
+    const sheetUrl = getConfiguredSheetUrl();
+    const token = getAccessToken();
+    if (token && sheetUrl) {
+      try {
+        await updateSeatInGoogleSheet(sheetUrl, token, { id: seatId }, 'delete');
+      } catch {
+        // silent
+      }
+    }
   };
 
-  // Add a new seat to any row (A - K)
-  const handleAddSeatToRow = (rowName: string) => {
-    let createdSeatId = '';
+  // Add a new seat to any row (A - K) (with Two-Way Sync to Google Sheet)
+  const handleAddSeatToRow = async (rowName: string) => {
+    let createdSeat: Seat | null = null;
     setPlanState(prev => {
       const rowSeats = (Object.values(prev.seats) as Seat[]).filter(s => s.row === rowName);
       const maxNum = rowSeats.reduce((max, s) => Math.max(max, s.number), 0);
       const newNum = maxNum + 1;
       const newSeatId = `${rowName}${newNum}`;
-      createdSeatId = newSeatId;
 
       let defaultCat: Seat['category'] = 'general';
       if (['A', 'B'].includes(rowName)) defaultCat = 'national_artist';
@@ -611,6 +694,8 @@ export default function App() {
         category: defaultCat,
       };
 
+      createdSeat = newSeat;
+
       return {
         ...prev,
         seats: {
@@ -619,7 +704,20 @@ export default function App() {
         },
       };
     });
-    showToast(`เพิ่มที่นั่ง ${createdSeatId || rowName} ในแถว ${rowName} เรียบร้อยแล้ว`);
+
+    if (createdSeat) {
+      const s = createdSeat as Seat;
+      showToast(`เพิ่มที่นั่ง ${s.id} ในแถว ${rowName} เรียบร้อยแล้ว`);
+      const sheetUrl = getConfiguredSheetUrl();
+      const token = getAccessToken();
+      if (token && sheetUrl) {
+        try {
+          await updateSeatInGoogleSheet(sheetUrl, token, s, 'add');
+        } catch {
+          // silent
+        }
+      }
+    }
   };
 
   // Remove the last seat from a row
@@ -633,8 +731,8 @@ export default function App() {
     handleRemoveSeat(maxSeat.id);
   };
 
-  // Remove a specific seat completely from the plan
-  const handleRemoveSeat = (seatId: string) => {
+  // Remove a specific seat completely from the plan (with Two-Way Sync to Google Sheet)
+  const handleRemoveSeat = async (seatId: string) => {
     setPlanState(prev => {
       if (!prev.seats[seatId]) return prev;
       const nextSeats = { ...prev.seats };
@@ -648,44 +746,104 @@ export default function App() {
       setSelectedSeat(null);
     }
     showToast(`ลด/ลบที่นั่ง ${seatId} เรียบร้อยแล้ว`);
+
+    const sheetUrl = getConfiguredSheetUrl();
+    const token = getAccessToken();
+    if (token && sheetUrl) {
+      try {
+        await updateSeatInGoogleSheet(sheetUrl, token, { id: seatId }, 'delete');
+      } catch {
+        // silent
+      }
+    }
   };
 
-  // Quick field update from Table view
+  // Debounced auto-sync for table inline updates
+  const seatSyncTimersRef = useRef<Record<string, any>>({});
+
+  const syncSeatToSheetDebounced = useCallback((seat: Seat, delay = 800) => {
+    const sheetUrl = getConfiguredSheetUrl();
+    const token = getAccessToken();
+    if (!token || !sheetUrl) return;
+
+    if (seatSyncTimersRef.current[seat.id]) {
+      clearTimeout(seatSyncTimersRef.current[seat.id]);
+    }
+
+    seatSyncTimersRef.current[seat.id] = setTimeout(async () => {
+      try {
+        const res = await updateSeatInGoogleSheet(sheetUrl, token, seat, 'update');
+        if (res.success) {
+          showToast(`ซิงก์ที่นั่ง ${seat.label || seat.id} กับ Google Sheet เรียบร้อย ✓`);
+        }
+      } catch (err) {
+        console.warn('Auto-sync seat to Google Sheet failed:', err);
+      }
+    }, delay);
+  }, []);
+
+  // Quick field update from Table view (synced with Google Sheet)
   const handleUpdateSeatField = (seatId: string, field: keyof Seat, value: any) => {
+    let updatedSeat: Seat | null = null;
     setPlanState(prev => {
       const target = prev.seats[seatId];
       if (!target) return prev;
+      const nextSeat: Seat = {
+        ...target,
+        [field]: value,
+      };
+
+      // If updating organization, also keep position aligned if empty
+      if (field === 'organization') {
+        nextSeat.position = value || '';
+      }
+
+      // If entering a guest name and status was empty, set to confirmed
+      if (field === 'guestName' && value && target.status === 'empty') {
+        nextSeat.status = 'confirmed';
+      }
+
+      updatedSeat = nextSeat;
       return {
         ...prev,
         seats: {
           ...prev.seats,
-          [seatId]: {
-            ...target,
-            [field]: value,
-          },
+          [seatId]: nextSeat,
         },
       };
     });
+
+    if (updatedSeat) {
+      const isInstant = field === 'hasFlowerBasket' || field === 'hasArtSet' || field === 'status';
+      syncSeatToSheetDebounced(updatedSeat, isInstant ? 100 : 800);
+    }
   };
 
-  // Check-in status toggle
+  // Check-in status toggle (synced with Google Sheet)
   const handleUpdateSeatStatus = (seatId: string, status: Seat['status'], checkInTime?: string) => {
+    let updatedSeat: Seat | null = null;
     setPlanState(prev => {
       const target = prev.seats[seatId];
       if (!target) return prev;
+      const nextSeat: Seat = {
+        ...target,
+        status,
+        checkInTime: checkInTime !== undefined ? checkInTime : target.checkInTime,
+      };
+      updatedSeat = nextSeat;
       return {
         ...prev,
         seats: {
           ...prev.seats,
-          [seatId]: {
-            ...target,
-            status,
-            checkInTime: checkInTime !== undefined ? checkInTime : target.checkInTime,
-          },
+          [seatId]: nextSeat,
         },
       };
     });
     showToast(`อัปเดตสถานะที่นั่ง ${seatId}`);
+
+    if (updatedSeat) {
+      syncSeatToSheetDebounced(updatedSeat, 100);
+    }
   };
 
   // Batch assign names from text

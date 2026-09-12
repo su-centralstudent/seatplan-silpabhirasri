@@ -1,7 +1,7 @@
 import React, { useState, useMemo } from 'react';
 import { Seat } from '../types';
 import { 
-  Search, Flower2, Users, CheckCircle2, Armchair, Sparkles, 
+  Search, Flower2, Users, CheckCircle2, Armchair, 
   X, ChevronDown, ChevronUp, MapPin, Edit3, Palette, Filter,
   Building, UserCheck, AlertCircle
 } from 'lucide-react';
@@ -121,19 +121,6 @@ export const StatsBanner: React.FC<StatsBannerProps> = ({
           >
             <Flower2 className={`w-3.5 h-3.5 ${highlightFilter === 'ดอกไม้' ? 'text-white' : 'text-rose-500'}`} />
             <span>กระเช้าดอกไม้ ({flowerBaskets})</span>
-          </button>
-
-          <button
-            type="button"
-            onClick={() => onFilterChange(highlightFilter === 'Set 1' ? '' : 'Set 1')}
-            className={`px-3 py-1.5 rounded-xl border font-medium flex items-center gap-1.5 transition-all cursor-pointer shadow-2xs ${
-              highlightFilter.includes('Set 1')
-                ? 'bg-amber-600 text-white border-amber-600 shadow-xs'
-                : 'bg-white text-slate-700 border-slate-200 hover:bg-amber-50/60 hover:border-amber-300'
-            }`}
-          >
-            <Sparkles className={`w-3.5 h-3.5 ${highlightFilter.includes('Set 1') ? 'text-white' : 'text-amber-500'}`} />
-            <span>Set 1 - 5 (VIP)</span>
           </button>
 
           <button

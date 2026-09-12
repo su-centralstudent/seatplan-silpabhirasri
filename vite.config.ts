@@ -146,10 +146,25 @@ function planConfigApiPlugin(): Plugin {
   };
 }
 
+function spa404Plugin(): Plugin {
+  return {
+    name: 'vite-plugin-spa-404',
+    closeBundle() {
+      const distIndex = path.resolve(__dirname, 'dist', 'index.html');
+      const dist404 = path.resolve(__dirname, 'dist', '404.html');
+      if (fs.existsSync(distIndex)) {
+        try {
+          fs.copyFileSync(distIndex, dist404);
+        } catch {}
+      }
+    },
+  };
+}
+
 export default defineConfig(() => {
   return {
-    base: './',
-    plugins: [react(), tailwindcss(), aistudioMediaPlugin(), planConfigApiPlugin()],
+    base: process.env.BASE_URL || './',
+    plugins: [react(), tailwindcss(), aistudioMediaPlugin(), planConfigApiPlugin(), spa404Plugin()],
     resolve: {
       alias: {
         '@': path.resolve(__dirname, '.'),

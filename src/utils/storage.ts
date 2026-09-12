@@ -76,7 +76,22 @@ export function loadSeatingPlan(): SeatingPlanState {
           parsed.seats['J8'].label = '8';
         }
 
-        // Migrate any legacy mock names (e.g. J1 = "ดร.สมชาย" or A1 = "กระทรวง อว.")
+        // Ensure B7 is cleared if cached with the erroneous duplicate name
+        if (parsed.seats['B7']?.guestName === 'ผศ.วีระวัฒน์') {
+          parsed.seats['B7'] = {
+            ...parsed.seats['B7'],
+            guestName: '',
+            organization: '',
+            position: 'ที่นั่งสำรอง B7',
+            setGroup: '',
+            hasFlowerBasket: false,
+            hasArtSet: false,
+            status: 'empty',
+            category: 'general',
+          };
+        }
+
+        // Migrate any legacy mock names (e.g. J1 = "ดร.สมชาย" or A1 = "กระทรวง อว." or old B7)
         // to authentic Google Sheet data from initialPlanState
         if (parsed.seats['J1']?.guestName === 'ดร.สมชาย' || parsed.seats['A1']?.guestName === 'กระทรวง อว.') {
           Object.keys(initialPlanState.seats).forEach(seatId => {
@@ -140,24 +155,32 @@ export function exportToJsonFile(state: SeatingPlanState): void {
 }
 
 export function exportToCsv(seats: Record<string, Seat>): void {
-  const headers = ['Seat ID', 'Row', 'Number', 'Position / Title', 'Guest Name', 'Organization', 'Set Group', 'Flower Basket (*)', 'Art Set', 'Seat Color', 'Category', 'Status', 'Notes', 'Check-in Time'];
+  const headers = ['Seat ID', 'Row', 'Number', 'Guest Name', 'Organization', 'Set Group', 'Flower Basket (*)', 'Art Set', 'Seat Color', 'Category', 'Status', 'Notes', 'Check-in Time'];
   
-  const rows = Object.values(seats).map(s => [
-    `"${s.id}"`,
-    `"${s.row}"`,
-    s.number,
-    `"${(s.position || '').replace(/"/g, '""')}"`,
-    `"${(s.guestName || '').replace(/"/g, '""')}"`,
-    `"${(s.organization || '').replace(/"/g, '""')}"`,
-    `"${(s.setGroup || '').replace(/"/g, '""')}"`,
-    s.hasFlowerBasket ? 'YES' : 'NO',
-    s.hasArtSet ? 'YES' : 'NO',
-    `"${(s.colorBg || 'Default White').replace(/"/g, '""')}"`,
-    `"${s.category}"`,
-    `"${s.status}"`,
-    `"${(s.notes || '').replace(/"/g, '""')}"`,
-    `"${s.checkInTime || ''}"`
-  ]);
+  const rows = Object.values(seats)
+    .sort((a, b) => {
+      const rowA = a.row || a.id.match(/^[A-Za-z]+/)?.[0] || '';
+      const rowB = b.row || b.id.match(/^[A-Za-z]+/)?.[0] || '';
+      if (rowA !== rowB) return rowA.localeCompare(rowB, 'th');
+      const numA = typeof a.number === 'number' && !isNaN(a.number) ? a.number : parseInt(a.id.replace(/\D/g, ''), 10) || 0;
+      const numB = typeof b.number === 'number' && !isNaN(b.number) ? b.number : parseInt(b.id.replace(/\D/g, ''), 10) || 0;
+      return numA - numB;
+    })
+    .map(s => [
+      `"${s.id}"`,
+      `"${s.row}"`,
+      s.number,
+      `"${(s.guestName || '').replace(/"/g, '""')}"`,
+      `"${(s.organization || s.position || '').replace(/"/g, '""')}"`,
+      `"${(s.setGroup || '').replace(/"/g, '""')}"`,
+      s.hasFlowerBasket ? 'YES' : 'NO',
+      s.hasArtSet ? 'YES' : 'NO',
+      `"${(s.colorBg || 'Default White').replace(/"/g, '""')}"`,
+      `"${s.category}"`,
+      `"${s.status}"`,
+      `"${(s.notes || '').replace(/"/g, '""')}"`,
+      `"${s.checkInTime || ''}"`
+    ]);
 
   const csvContent = '\uFEFF' + [headers.join(','), ...rows.map(r => r.join(','))].join('\n');
   const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });

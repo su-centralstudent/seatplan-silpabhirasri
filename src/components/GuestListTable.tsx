@@ -34,11 +34,10 @@ export const GuestListTable: React.FC<GuestListTableProps> = ({
   const [searchQuery, setSearchQuery] = useState('');
   const [rowFilter, setRowFilter] = useState<string>('all');
   const [selectedAddRow, setSelectedAddRow] = useState<string>('A');
-  const [categoryFilter, setCategoryFilter] = useState<string>('all');
   const [basketFilter, setBasketFilter] = useState<string>('all');
   const [artSetFilter, setArtSetFilter] = useState<string>('all');
   const [statusFilter, setStatusFilter] = useState<string>('all');
-  const [sortField, setSortField] = useState<'id' | 'position' | 'guestName' | 'setGroup'>('id');
+  const [sortField, setSortField] = useState<'id' | 'guestName' | 'organization' | 'setGroup'>('id');
   const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('asc');
   const [selectedGuestForAssign, setSelectedGuestForAssign] = useState<UnassignedGuest | null>(null);
   const [targetAssignSeatId, setTargetAssignSeatId] = useState<string>('');
@@ -101,7 +100,36 @@ export const GuestListTable: React.FC<GuestListTableProps> = ({
   };
 
   const seatList = useMemo(() => Object.values(seats), [seats]);
-  const emptySeats = useMemo(() => seatList.filter(s => s.status === 'empty' || !s.guestName), [seatList]);
+
+  // Natural seat parser and comparison (A1, A2, A3 ... A10, A11, A12)
+  const parseSeatId = (id: string, row?: string, num?: number) => {
+    const r = (row || id.match(/^[A-Za-z]+/)?.[0] || '').toUpperCase();
+    let n = typeof num === 'number' && !isNaN(num) ? num : undefined;
+    if (n === undefined) {
+      const digits = id.match(/\d+/);
+      n = digits ? parseInt(digits[0], 10) : 0;
+    }
+    return { row: r, number: n };
+  };
+
+  const compareSeatNatural = (a: Seat, b: Seat, dir: 'asc' | 'desc' = 'asc') => {
+    const pA = parseSeatId(a.id, a.row, a.number);
+    const pB = parseSeatId(b.id, b.row, b.number);
+
+    let cmp = 0;
+    if (pA.row !== pB.row) {
+      cmp = pA.row.localeCompare(pB.row, 'th');
+    } else {
+      cmp = pA.number - pB.number;
+    }
+    return dir === 'asc' ? cmp : -cmp;
+  };
+
+  const emptySeats = useMemo(() => {
+    return seatList
+      .filter(s => s.status === 'empty' || !s.guestName)
+      .sort((a, b) => compareSeatNatural(a, b, 'asc'));
+  }, [seatList]);
 
   const filteredUnassigned = useMemo(() => {
     if (!searchQuery.trim()) return unassignedGuests;
@@ -119,9 +147,6 @@ export const GuestListTable: React.FC<GuestListTableProps> = ({
       // Row filter
       if (rowFilter !== 'all' && s.row !== rowFilter) return false;
 
-      // Category filter
-      if (categoryFilter !== 'all' && s.category !== categoryFilter) return false;
-
       // Flower basket filter
       if (basketFilter === 'yes' && !s.hasFlowerBasket) return false;
       if (basketFilter === 'no' && s.hasFlowerBasket) return false;
@@ -137,32 +162,48 @@ export const GuestListTable: React.FC<GuestListTableProps> = ({
       if (searchQuery.trim()) {
         const q = searchQuery.toLowerCase();
         const matchId = s.id.toLowerCase().includes(q);
-        const matchPos = s.position?.toLowerCase().includes(q);
         const matchName = s.guestName?.toLowerCase().includes(q);
         const matchOrg = s.organization?.toLowerCase().includes(q);
+        const matchPos = s.position?.toLowerCase().includes(q);
         const matchSet = s.setGroup?.toLowerCase().includes(q);
         const matchNotes = s.notes?.toLowerCase().includes(q);
-        if (!matchId && !matchPos && !matchName && !matchOrg && !matchSet && !matchNotes) {
+        if (!matchId && !matchName && !matchOrg && !matchPos && !matchSet && !matchNotes) {
           return false;
         }
       }
 
       return true;
     }).sort((a, b) => {
-      let valA = (a[sortField] || '') as string;
-      let valB = (b[sortField] || '') as string;
-
       if (sortField === 'id') {
-        valA = a.id;
-        valB = b.id;
+        return compareSeatNatural(a, b, sortDirection);
       }
 
-      const cmp = valA.localeCompare(valB, 'th');
-      return sortDirection === 'asc' ? cmp : -cmp;
-    });
-  }, [seatList, searchQuery, rowFilter, categoryFilter, basketFilter, statusFilter, sortField, sortDirection]);
+      if (sortField === 'guestName') {
+        const valA = (a.guestName || '').trim();
+        const valB = (b.guestName || '').trim();
+        const cmp = valA.localeCompare(valB, 'th', { numeric: true, sensitivity: 'base' });
+        return sortDirection === 'asc' ? cmp : -cmp;
+      }
 
-  const handleSort = (field: 'id' | 'position' | 'guestName' | 'setGroup') => {
+      if (sortField === 'organization') {
+        const valA = (a.organization || a.position || '').trim();
+        const valB = (b.organization || b.position || '').trim();
+        const cmp = valA.localeCompare(valB, 'th', { numeric: true, sensitivity: 'base' });
+        return sortDirection === 'asc' ? cmp : -cmp;
+      }
+
+      if (sortField === 'setGroup') {
+        const valA = (a.setGroup || '').trim();
+        const valB = (b.setGroup || '').trim();
+        const cmp = valA.localeCompare(valB, 'th', { numeric: true, sensitivity: 'base' });
+        return sortDirection === 'asc' ? cmp : -cmp;
+      }
+
+      return 0;
+    });
+  }, [seatList, searchQuery, rowFilter, basketFilter, artSetFilter, statusFilter, sortField, sortDirection]);
+
+  const handleSort = (field: 'id' | 'guestName' | 'organization' | 'setGroup') => {
     if (sortField === field) {
       setSortDirection(prev => prev === 'asc' ? 'desc' : 'asc');
     } else {
@@ -252,7 +293,7 @@ export const GuestListTable: React.FC<GuestListTableProps> = ({
                   className="px-2 py-1 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-semibold flex items-center gap-1 transition-colors cursor-pointer whitespace-nowrap"
                 >
                   <Plus className="w-3.5 h-3.5" />
-                  <span>+ เพิ่มที่นั่ง</span>
+                  <span>เพิ่มที่นั่ง</span>
                 </button>
               </div>
             )}
@@ -345,26 +386,6 @@ export const GuestListTable: React.FC<GuestListTableProps> = ({
               </select>
             </div>
 
-            {/* Category Filter */}
-            <div className="flex items-center gap-1 bg-white px-2.5 py-1 rounded-lg border border-slate-200">
-              <span className="text-slate-500">หมวด:</span>
-              <select
-                value={categoryFilter}
-                onChange={(e) => setCategoryFilter(e.target.value)}
-                className="bg-transparent font-medium text-slate-800 focus:outline-none cursor-pointer"
-              >
-                <option value="all">ทุกหมวด</option>
-                <option value="vip_president">VIP ประธาน / ทูต / อธิการ</option>
-                <option value="vip_minister">ผู้แทนกระทรวง / กรมศิลป์</option>
-                <option value="executive">ผู้บริหาร / รองอธิการ</option>
-                <option value="dean">คณบดี</option>
-                <option value="director">ผอ.สำนัก / สถาบัน</option>
-                <option value="national_artist">ศิลปินแห่งชาติ</option>
-                <option value="awardee">ผู้เข้ารับรางวัล</option>
-                <option value="guest_follower">ผู้ติดตาม / ล่าม</option>
-              </select>
-            </div>
-
             {/* Flower Basket */}
             <div className="flex items-center gap-1 bg-white px-2.5 py-1 rounded-lg border border-slate-200">
               <span className="text-slate-500">กระเช้าดอกไม้:</span>
@@ -436,55 +457,54 @@ export const GuestListTable: React.FC<GuestListTableProps> = ({
           {(displayMode === 'auto' || displayMode === 'table') && (
             <div className={`${displayMode === 'auto' ? 'hidden md:block' : 'block'} overflow-x-auto`}>
               <table className="w-full text-left text-xs text-slate-700">
-                <thead className="bg-slate-100/80 text-slate-600 font-semibold border-b border-slate-200">
+                <thead className="bg-slate-100/90 text-slate-700 font-bold border-b border-slate-200">
                   <tr>
                     <th 
-                      className="py-3 px-3.5 cursor-pointer hover:bg-slate-200/60"
+                      className="py-3 px-3.5 cursor-pointer hover:bg-slate-200/60 text-left w-24 sm:w-28"
                       onClick={() => handleSort('id')}
                     >
-                      <div className="flex items-center gap-1">
-                        รหัสที่นั่ง
-                        <ArrowUpDown className="w-3 h-3 text-slate-400" />
+                      <div className="flex items-center gap-1.5 text-left">
+                        <span>รหัสที่นั่ง</span>
+                        <ArrowUpDown className="w-3.5 h-3.5 text-slate-400" />
                       </div>
                     </th>
                     <th 
-                      className="py-3 px-3.5 cursor-pointer hover:bg-slate-200/60"
-                      onClick={() => handleSort('position')}
-                    >
-                      <div className="flex items-center gap-1">
-                        ตำแหน่ง / บทบาท
-                        <ArrowUpDown className="w-3 h-3 text-slate-400" />
-                      </div>
-                    </th>
-                    <th 
-                      className="py-3 px-3.5 cursor-pointer hover:bg-slate-200/60"
+                      className="py-3 px-3.5 cursor-pointer hover:bg-slate-200/60 text-left min-w-[220px]"
                       onClick={() => handleSort('guestName')}
                     >
-                      <div className="flex items-center gap-1">
-                        ชื่อแขกผู้มีเกียรติ
-                        <ArrowUpDown className="w-3 h-3 text-slate-400" />
+                      <div className="flex items-center gap-1.5 text-left">
+                        <span>ชื่อแขกผู้มีเกียรติ</span>
+                        <ArrowUpDown className="w-3.5 h-3.5 text-slate-400" />
                       </div>
                     </th>
-                    <th className="py-3 px-3.5">หน่วยงาน / สังกัด</th>
                     <th 
-                      className="py-3 px-3.5 cursor-pointer hover:bg-slate-200/60"
+                      className="py-3 px-3.5 cursor-pointer hover:bg-slate-200/60 text-left min-w-[240px]"
+                      onClick={() => handleSort('organization')}
+                    >
+                      <div className="flex items-center gap-1.5 text-left">
+                        <span>หน่วยงาน / สังกัด</span>
+                        <ArrowUpDown className="w-3.5 h-3.5 text-slate-400" />
+                      </div>
+                    </th>
+                    <th 
+                      className="py-3 px-3.5 cursor-pointer hover:bg-slate-200/60 text-center w-24 sm:w-28"
                       onClick={() => handleSort('setGroup')}
                     >
-                      <div className="flex items-center gap-1">
-                        กลุ่ม Set
-                        <ArrowUpDown className="w-3 h-3 text-slate-400" />
+                      <div className="flex items-center justify-center gap-1">
+                        <span>กลุ่ม Set</span>
+                        <ArrowUpDown className="w-3.5 h-3.5 text-slate-400" />
                       </div>
                     </th>
-                    <th className="py-3 px-3.5 text-center">กระเช้าดอกไม้ (*)</th>
-                    <th className="py-3 px-3.5 text-center">Art Set</th>
-                    <th className="py-3 px-3.5 text-center">สถานะเข้าร่วม</th>
-                    <th className="py-3 px-3.5 text-right">จัดการ</th>
+                    <th className="py-3 px-3.5 text-center w-28">กระเช้าดอกไม้ (*)</th>
+                    <th className="py-3 px-3.5 text-center w-24">Art Set</th>
+                    <th className="py-3 px-3.5 text-center w-36">สถานะเข้าร่วม</th>
+                    <th className="py-3 px-3.5 text-right w-24">จัดการ</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
                   {filteredSeats.length === 0 ? (
                     <tr>
-                      <td colSpan={9} className="py-12 text-center text-slate-400">
+                      <td colSpan={8} className="py-12 text-center text-slate-400">
                         <Armchair className="w-8 h-8 text-slate-300 mx-auto mb-2" />
                         ไม่พบข้อมูลที่นั่งตามเงื่อนไขที่เลือก
                       </td>
@@ -496,42 +516,33 @@ export const GuestListTable: React.FC<GuestListTableProps> = ({
                         className="hover:bg-blue-50/50 transition-colors group"
                       >
                         {/* Seat ID */}
-                        <td className="py-2.5 px-3.5 font-mono font-bold text-slate-900">
-                          <span className="px-2 py-1 bg-slate-100 rounded-md border border-slate-200">
+                        <td className="py-2.5 px-3.5 font-mono font-bold text-slate-900 text-left whitespace-nowrap">
+                          <span className="px-2.5 py-1 bg-slate-100 text-slate-900 rounded-md border border-slate-200 font-mono font-bold inline-block">
                             {seat.label || seat.id}
                           </span>
                         </td>
 
-                        {/* Position / Title (Inline edit) */}
-                        <td className="py-2.5 px-3.5 font-medium">
-                          <input
-                            type="text"
-                            value={seat.position || ''}
-                            onChange={(e) => onUpdateSeatField(seat.id, 'position', e.target.value)}
-                            placeholder="ระบุตำแหน่ง..."
-                            className="w-full bg-transparent px-1.5 py-0.5 rounded hover:bg-white focus:bg-white focus:ring-1 focus:ring-blue-500 border border-transparent focus:border-slate-300"
-                          />
-                        </td>
-
-                        {/* Guest Name (Inline edit) */}
-                        <td className="py-2.5 px-3.5">
+                        {/* Guest Name (Inline edit, Left-aligned, full width & text) */}
+                        <td className="py-2.5 px-3.5 text-left">
                           <input
                             type="text"
                             value={seat.guestName || ''}
                             onChange={(e) => onUpdateSeatField(seat.id, 'guestName', e.target.value)}
-                            placeholder="ระบุชื่อแขก..."
-                            className="w-full bg-transparent px-1.5 py-0.5 rounded hover:bg-white focus:bg-white focus:ring-1 focus:ring-blue-500 border border-transparent focus:border-slate-300 font-medium text-slate-900"
+                            placeholder="ระบุชื่อแขกผู้มีเกียรติ..."
+                            className="w-full text-left bg-transparent px-2 py-1 rounded hover:bg-white focus:bg-white focus:ring-1 focus:ring-blue-500 border border-transparent focus:border-slate-300 font-semibold text-slate-900 text-xs sm:text-sm transition-colors"
+                            title={seat.guestName || 'ยังไม่ระบุชื่อแขก'}
                           />
                         </td>
 
-                        {/* Organization */}
-                        <td className="py-2.5 px-3.5 text-slate-500">
+                        {/* Organization / Agency (Inline edit, Left-aligned, full width & text) */}
+                        <td className="py-2.5 px-3.5 text-left text-slate-700">
                           <input
                             type="text"
                             value={seat.organization || ''}
                             onChange={(e) => onUpdateSeatField(seat.id, 'organization', e.target.value)}
-                            placeholder="สังกัด..."
-                            className="w-full bg-transparent px-1.5 py-0.5 rounded hover:bg-white focus:bg-white focus:ring-1 focus:ring-blue-500 border border-transparent focus:border-slate-300"
+                            placeholder="ระบุหน่วยงาน / สังกัด..."
+                            className="w-full text-left bg-transparent px-2 py-1 rounded hover:bg-white focus:bg-white focus:ring-1 focus:ring-blue-500 border border-transparent focus:border-slate-300 text-slate-700 text-xs sm:text-sm transition-colors"
+                            title={seat.organization || 'ยังไม่ระบุหน่วยงาน'}
                           />
                         </td>
 
@@ -703,25 +714,14 @@ export const GuestListTable: React.FC<GuestListTableProps> = ({
                         </div>
                       </div>
 
-                      {/* Position & Organization */}
-                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs bg-slate-50 p-2.5 rounded-xl border border-slate-100">
-                        <div className="space-y-0.5">
-                          <div className="text-[10px] text-slate-400 font-medium flex items-center gap-1">
-                            <Briefcase className="w-3 h-3 text-slate-400 shrink-0" />
-                            <span>ตำแหน่ง / บทบาท</span>
-                          </div>
-                          <div className="font-semibold text-slate-800 break-words">
-                            {seat.position || '-'}
-                          </div>
+                      {/* Organization / Agency (Left-aligned, full text) */}
+                      <div className="text-xs bg-slate-50 p-2.5 rounded-xl border border-slate-100 space-y-0.5 text-left">
+                        <div className="text-[10px] text-slate-400 font-medium flex items-center gap-1 text-left">
+                          <Building2 className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+                          <span>หน่วยงาน / สังกัด</span>
                         </div>
-                        <div className="space-y-0.5">
-                          <div className="text-[10px] text-slate-400 font-medium flex items-center gap-1">
-                            <Building2 className="w-3 h-3 text-slate-400 shrink-0" />
-                            <span>หน่วยงาน / สังกัด</span>
-                          </div>
-                          <div className="font-semibold text-slate-800 break-words">
-                            {seat.organization || '-'}
-                          </div>
+                        <div className="font-semibold text-slate-800 break-words text-left text-xs sm:text-sm">
+                          {seat.organization || seat.position || '-'}
                         </div>
                       </div>
 
@@ -817,9 +817,8 @@ export const GuestListTable: React.FC<GuestListTableProps> = ({
                 <thead className="bg-amber-50/80 text-amber-900 font-semibold border-b border-amber-200">
                   <tr>
                     <th className="py-3 px-3.5 w-12 text-center">ลำดับ</th>
-                    <th className="py-3 px-3.5">ชื่อ-นามสกุล / แขกผู้มีเกียรติ</th>
-                    <th className="py-3 px-3.5">ตำแหน่ง</th>
-                    <th className="py-3 px-3.5">สังกัด / หน่วยงาน</th>
+                    <th className="py-3 px-3.5 text-left min-w-[200px]">ชื่อ-นามสกุล / แขกผู้มีเกียรติ</th>
+                    <th className="py-3 px-3.5 text-left min-w-[220px]">สังกัด / หน่วยงาน</th>
                     <th className="py-3 px-3.5 text-center">กระเช้า (*)</th>
                     <th className="py-3 px-3.5 text-center">Art Set</th>
                     <th className="py-3 px-3.5 text-center">สถานะ</th>
@@ -829,7 +828,7 @@ export const GuestListTable: React.FC<GuestListTableProps> = ({
                 <tbody className="divide-y divide-slate-100">
                   {filteredUnassigned.length === 0 ? (
                     <tr>
-                      <td colSpan={8} className="py-12 text-center text-slate-400">
+                      <td colSpan={7} className="py-12 text-center text-slate-400">
                         <Users className="w-8 h-8 text-slate-300 mx-auto mb-2" />
                         ไม่พบรายชื่อผู้มีเกียรติที่รอจัดที่นั่ง
                       </td>
@@ -838,9 +837,8 @@ export const GuestListTable: React.FC<GuestListTableProps> = ({
                     filteredUnassigned.map((guest, idx) => (
                       <tr key={guest.id || idx} className="hover:bg-amber-50/40 transition-colors">
                         <td className="py-3 px-3.5 text-center text-slate-400 font-mono">{idx + 1}</td>
-                        <td className="py-3 px-3.5 font-bold text-slate-900">{guest.name}</td>
-                        <td className="py-3 px-3.5 text-slate-600">{guest.position || '-'}</td>
-                        <td className="py-3 px-3.5 text-slate-600">{guest.organization || '-'}</td>
+                        <td className="py-3 px-3.5 font-bold text-slate-900 text-left">{guest.name}</td>
+                        <td className="py-3 px-3.5 text-slate-700 text-left">{guest.organization || guest.position || '-'}</td>
                         <td className="py-3 px-3.5 text-center">
                           {guest.hasFlowerBasket ? (
                             <span className="px-2 py-0.5 bg-rose-50 text-rose-600 border border-rose-200 rounded-md font-bold text-[10px]">

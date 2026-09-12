@@ -320,7 +320,7 @@ export const SeatEditModal: React.FC<SeatEditModalProps> = ({
                   title={`เพิ่มที่นั่งถัดไปในแถว ${seat.row}`}
                 >
                   <Plus className="w-3.5 h-3.5" />
-                  + แถว {seat.row}
+                  เพิ่มที่นั่งแถว {seat.row}
                 </button>
               )}
 

@@ -15,7 +15,8 @@ import {
   generateSheetTemplateTsv,
   downloadGoogleSheetTemplateCsv,
   saveDriveImageLinkToGoogleSheet,
-  extractSpreadsheetId
+  extractSpreadsheetId,
+  pushFullPlanToGoogleSheet
 } from '../utils/googleSheetSync';
 import { 
   initAuth, 
@@ -70,6 +71,7 @@ export const GoogleSheetSyncModal: React.FC<GoogleSheetSyncModalProps> = ({
   const [isCopiedTemplate, setIsCopiedTemplate] = useState<boolean>(false);
   const [showInstructions, setShowInstructions] = useState<boolean>(false);
   const [lastSyncTime, setLastSyncTime] = useState<string | null>(() => getLastSyncTime());
+  const [isPushing, setIsPushing] = useState<boolean>(false);
 
   // Google OAuth User State
   const [currentUser, setCurrentUser] = useState<User | null>(null);
@@ -264,6 +266,33 @@ export const GoogleSheetSyncModal: React.FC<GoogleSheetSyncModalProps> = ({
       }
     });
 
+    // Ensure seats not assigned in Google Sheet (such as B7) are cleared
+    const sheetAssignedIds = new Set(
+      parsedRows
+        .filter(r => r.seatId && ((r.guestName && r.guestName.trim()) || (r.position && r.position.trim())))
+        .map(r => r.seatId.trim().toUpperCase())
+    );
+
+    Object.keys(nextSeats).forEach(seatId => {
+      const currentSeat = nextSeats[seatId];
+      if (!sheetAssignedIds.has(seatId.toUpperCase()) && (currentSeat.guestName || currentSeat.status !== 'empty')) {
+        nextSeats[seatId] = {
+          ...currentSeat,
+          guestName: '',
+          organization: '',
+          position: `ที่นั่งสำรอง ${seatId}`,
+          setGroup: '',
+          hasFlowerBasket: false,
+          hasArtSet: false,
+          status: 'empty',
+          notes: '',
+          checkInTime: '',
+          category: 'general',
+        };
+        updatedCount++;
+      }
+    });
+
     const nowStr = new Date().toLocaleTimeString('th-TH', { hour: '2-digit', minute: '2-digit' });
     localStorage.setItem('google_sheet_last_sync_time', nowStr);
     setLastSyncTime(nowStr);
@@ -281,6 +310,45 @@ export const GoogleSheetSyncModal: React.FC<GoogleSheetSyncModalProps> = ({
       detectedPlanDriveUrl || undefined
     );
     onClose();
+  };
+
+  // Push all plan data from web application to Google Sheet (Two-Way Sync)
+  const handlePushToGoogleSheet = async () => {
+    const targetUrl = sheetUrl.trim() || getConfiguredSheetUrl();
+    if (!targetUrl) {
+      setErrorMsg('กรุณาระบุ URL ของ Google Sheet ก่อนส่งข้อมูล');
+      return;
+    }
+
+    let token = getAccessToken();
+    if (!token) {
+      setErrorMsg('กรุณาเข้าสู่ระบบ Google เพื่อยืนยันสิทธิ์ในการเขียนข้อมูลลง Google Sheet');
+      return;
+    }
+
+    setIsPushing(true);
+    setErrorMsg('');
+    setSuccessMsg('');
+
+    try {
+      const pushRes = await pushFullPlanToGoogleSheet(
+        targetUrl,
+        token,
+        seats,
+        parsedUnassigned,
+        selectedSheetTab || undefined
+      );
+
+      if (pushRes.success) {
+        setSuccessMsg(pushRes.message);
+      } else {
+        setErrorMsg(pushRes.message);
+      }
+    } catch (err) {
+      setErrorMsg(err instanceof Error ? err.message : 'เกิดข้อผิดพลาดในการส่งข้อมูลไปยัง Google Sheet');
+    } finally {
+      setIsPushing(false);
+    }
   };
 
   // Copy template to clipboard
@@ -664,6 +732,37 @@ export const GoogleSheetSyncModal: React.FC<GoogleSheetSyncModalProps> = ({
                     ซิงก์ล่าสุด: <strong>{lastSyncTime}</strong>
                   </span>
                 )}
+              </div>
+            )}
+          </div>
+
+          {/* Two-Way Sync Section */}
+          <div className="p-3.5 bg-blue-50/70 border border-blue-200 rounded-xl space-y-2.5 text-xs">
+            <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
+              <div className="space-y-1 flex-1">
+                <div className="flex items-center gap-1.5 font-bold text-blue-950">
+                  <RotateCw className="w-4 h-4 text-blue-600" />
+                  <span>ระบบซิงก์สองทาง (Two-Way Sync) เชื่อมโยงกับ Google Sheet</span>
+                </div>
+                <p className="text-[11px] text-blue-800 leading-relaxed">
+                  เมื่อแก้ไข เพิ่ม หรือลบข้อมูลที่นั่งในเว็บ ระบบจะอัปเดตลง Google Sheet แบบ Real-time หรือกดส่งข้อมูลทั้งหมดในผังปัจจุบันกลับไปยัง Google Sheet ได้ทันที
+                </p>
+              </div>
+
+              <button
+                type="button"
+                onClick={handlePushToGoogleSheet}
+                disabled={isPushing}
+                className="px-3.5 py-2 bg-blue-600 hover:bg-blue-700 disabled:bg-slate-300 text-white font-semibold rounded-xl text-xs flex items-center gap-1.5 transition-all shadow-xs shrink-0 cursor-pointer w-full sm:w-auto justify-center"
+              >
+                <RotateCw className={`w-3.5 h-3.5 ${isPushing ? 'animate-spin' : ''}`} />
+                <span>{isPushing ? 'กำลังส่งข้อมูล...' : 'ส่งข้อมูลทั้งหมดไป Google Sheet'}</span>
+              </button>
+            </div>
+            {!currentUser && (
+              <div className="pt-2 border-t border-blue-200/60 text-[11px] text-blue-700 flex items-center gap-1.5">
+                <AlertCircle className="w-3.5 h-3.5 text-blue-600 shrink-0" />
+                <span>หมายเหตุ: การส่งข้อมูลกลับไปยัง Google Sheet ต้องเข้าสู่ระบบบัญชี Google ด้านบนที่มีสิทธิ์แก้ไขไฟล์</span>
               </div>
             )}
           </div>

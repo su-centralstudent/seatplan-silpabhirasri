@@ -17,7 +17,7 @@ interface RouteDrawingOverlayProps {
 
 export type DrawingMethod = 'freehand' | 'waypoints';
 
-export const RouteDrawingOverlay: React.FC<RouteDrawingOverlayProps> = ({
+export const RouteDrawingOverlay = ({
   routes,
   onSaveRoutes,
   onResetRoutes,
